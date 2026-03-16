@@ -105,6 +105,12 @@ func (r *MCPServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Update status based on Deployment status
 	mcpServer.Status.DeploymentName = existingDeployment.Name
 	mcpServer.Status.ServiceName = mcpServer.Name
+	if mcpServer.Spec.Port > 0 {
+		mcpServer.Status.Address = &mcpv1alpha1.MCPServerAddress{
+			URL: fmt.Sprintf("http://%s.%s.svc.cluster.local:%d",
+				mcpServer.Name, mcpServer.Namespace, mcpServer.Spec.Port),
+		}
+	}
 
 	// Determine phase from deployment status
 	phase, condition := determinePhase(existingDeployment, mcpServer.Generation)

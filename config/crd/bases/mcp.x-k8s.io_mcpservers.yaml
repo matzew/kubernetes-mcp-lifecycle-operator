@@ -24,6 +24,9 @@ spec:
     - jsonPath: .spec.port
       name: Port
       type: integer
+    - jsonPath: .status.address.url
+      name: Address
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -798,6 +801,15 @@ spec:
           status:
             description: status defines the observed state of MCPServer
             properties:
+              address:
+                description: Address contains the address of the MCP server service.
+                properties:
+                  url:
+                    description: |-
+                      URL is the cluster-internal address of the MCP server service.
+                      Format: http://<servicename>.<namespace>.svc.cluster.local:<port>
+                    type: string
+                type: object
               conditions:
                 description: |-
                   Conditions represent the current state of the MCPServer resource.

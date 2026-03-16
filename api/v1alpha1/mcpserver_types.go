@@ -132,6 +132,14 @@ type MCPServerSpec struct {
 	SecretVolumeName string `json:"secretVolumeName,omitempty"`
 }
 
+// MCPServerAddress contains the address information for the MCPServer.
+type MCPServerAddress struct {
+	// URL is the cluster-internal address of the MCP server service.
+	// Format: http://<servicename>.<namespace>.svc.cluster.local:<port>
+	// +optional
+	URL string `json:"url,omitempty"`
+}
+
 // MCPServerStatus defines the observed state of MCPServer.
 type MCPServerStatus struct {
 	// Phase represents the current lifecycle phase of the MCPServer.
@@ -146,6 +154,10 @@ type MCPServerStatus struct {
 	// ServiceName is the name of the Service created for this MCPServer.
 	// +optional
 	ServiceName string `json:"serviceName,omitempty"`
+
+	// Address contains the address of the MCP server service.
+	// +optional
+	Address *MCPServerAddress `json:"address,omitempty"`
 
 	// Conditions represent the current state of the MCPServer resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
@@ -167,6 +179,7 @@ type MCPServerStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Image",type=string,JSONPath=`.spec.image`
 // +kubebuilder:printcolumn:name="Port",type=integer,JSONPath=`.spec.port`
+// +kubebuilder:printcolumn:name="Address",type=string,JSONPath=`.status.address.url`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // MCPServer is the Schema for the mcpservers API
