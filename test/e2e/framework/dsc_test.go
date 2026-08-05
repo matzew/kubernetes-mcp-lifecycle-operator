@@ -29,6 +29,12 @@ import (
 	f "github.com/kubernetes-sigs/mcp-lifecycle-operator/test/e2e/framework"
 )
 
+const (
+	testDSCName  = "default-dsc"
+	stateManaged = "Managed"
+	stateRemoved = "Removed"
+)
+
 // ---------------------------------------------------------------------------
 // fake client helpers
 // ---------------------------------------------------------------------------
@@ -38,13 +44,13 @@ func newFakeClient(objects ...client.Object) client.Client {
 }
 
 func newDSC(managementState string) *unstructured.Unstructured {
-	dsc := &unstructured.Unstructured{Object: map[string]interface{}{
+	dsc := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "datasciencecluster.opendatahub.io/v2",
 		"kind":       "DataScienceCluster",
-		"metadata":   map[string]interface{}{"name": "default-dsc"},
-		"spec": map[string]interface{}{
-			"components": map[string]interface{}{
-				"mcplifecycleoperator": map[string]interface{}{
+		"metadata":   map[string]any{"name": testDSCName},
+		"spec": map[string]any{
+			"components": map[string]any{
+				"mcplifecycleoperator": map[string]any{
 					"managementState": managementState,
 				},
 			},
@@ -55,8 +61,8 @@ func newDSC(managementState string) *unstructured.Unstructured {
 
 func newDSCWithCondition(managementState, condType, condStatus string) *unstructured.Unstructured {
 	dsc := newDSC(managementState)
-	_ = unstructured.SetNestedSlice(dsc.Object, []interface{}{
-		map[string]interface{}{
+	_ = unstructured.SetNestedSlice(dsc.Object, []any{
+		map[string]any{
 			"type":   condType,
 			"status": condStatus,
 		},
@@ -72,7 +78,7 @@ func getDSCManagementState(t *testing.T, ctx context.Context, cl client.Client) 
 		Version: "v2",
 		Kind:    "DataScienceCluster",
 	})
-	if err := cl.Get(ctx, client.ObjectKey{Name: "default-dsc"}, dsc); err != nil {
+	if err := cl.Get(ctx, client.ObjectKey{Name: testDSCName}, dsc); err != nil {
 		t.Fatalf("failed to get DSC: %v", err)
 	}
 	state, _, _ := unstructured.NestedString(dsc.Object, "spec", "components", "mcplifecycleoperator", "managementState")
@@ -155,10 +161,10 @@ func TestMaybeEnsureDSCManaged_NoDSC(t *testing.T) {
 
 // TestMaybeEnsureDSCManaged_AlreadyManaged verifies that when the DSC exists
 // with managementState=Managed, MaybeEnsureDSCManaged returns
-// DSCState{Found:true, OriginalState:"Managed"} and does not patch the object.
+// DSCState{Found:true, OriginalState:stateManaged} and does not patch the object.
 func TestMaybeEnsureDSCManaged_AlreadyManaged(t *testing.T) {
 	// Given: DSC with managementState=Managed.
-	cl := newFakeClient(newDSC("Managed"))
+	cl := newFakeClient(newDSC(stateManaged))
 	ctx := context.Background()
 
 	// When: MaybeEnsureDSCManaged is called.
@@ -171,11 +177,11 @@ func TestMaybeEnsureDSCManaged_AlreadyManaged(t *testing.T) {
 	if !state.Found {
 		t.Errorf("expected Found=true")
 	}
-	if state.OriginalState != "Managed" {
+	if state.OriginalState != stateManaged {
 		t.Errorf("expected OriginalState=Managed, got %q", state.OriginalState)
 	}
 	got := getDSCManagementState(t, ctx, cl)
-	if got != "Managed" {
+	if got != stateManaged {
 		t.Errorf("expected managementState=Managed after no-op, got %q", got)
 	}
 }
@@ -190,7 +196,7 @@ func TestMaybeEnsureDSCManaged_RemovedPatchesToManaged(t *testing.T) {
 	// Given: DSC with managementState=Removed AND the ready condition already set.
 	// The fake client preserves status across spec updates, so the wait loop
 	// will find the condition immediately after the patch.
-	cl := newFakeClient(newDSCWithCondition("Removed", "MCPLifecycleOperatorReady", "True"))
+	cl := newFakeClient(newDSCWithCondition(stateRemoved, "MCPLifecycleOperatorReady", "True"))
 	ctx := context.Background()
 
 	// When: MaybeEnsureDSCManaged is called.
@@ -203,11 +209,11 @@ func TestMaybeEnsureDSCManaged_RemovedPatchesToManaged(t *testing.T) {
 	if !state.Found {
 		t.Errorf("expected Found=true")
 	}
-	if state.OriginalState != "Removed" {
+	if state.OriginalState != stateRemoved {
 		t.Errorf("expected OriginalState=Removed, got %q", state.OriginalState)
 	}
 	got := getDSCManagementState(t, ctx, cl)
-	if got != "Managed" {
+	if got != stateManaged {
 		t.Errorf("expected managementState=Managed after patch, got %q", got)
 	}
 }
@@ -222,8 +228,8 @@ func TestMaybeRestoreDSCState_NotFound(t *testing.T) {
 	// Given: state with Found=false.
 	state := f.DSCState{
 		Found:         false,
-		OriginalState: "Removed",
-		DSCName:       "default-dsc",
+		OriginalState: stateRemoved,
+		DSCName:       testDSCName,
 	}
 
 	// When: MaybeRestoreDSCState is called with a nil client.
@@ -241,8 +247,8 @@ func TestMaybeRestoreDSCState_AlreadyManaged(t *testing.T) {
 	// Given: state with OriginalState=Managed.
 	state := f.DSCState{
 		Found:         true,
-		OriginalState: "Managed",
-		DSCName:       "default-dsc",
+		OriginalState: stateManaged,
+		DSCName:       testDSCName,
 	}
 
 	// When: MaybeRestoreDSCState is called with a nil client.
@@ -259,12 +265,12 @@ func TestMaybeRestoreDSCState_AlreadyManaged(t *testing.T) {
 // patches the DSC managementState back to Removed.
 func TestMaybeRestoreDSCState_RestoresRemoved(t *testing.T) {
 	// Given: DSC currently at Managed (post-test state), original was Removed.
-	cl := newFakeClient(newDSC("Managed"))
+	cl := newFakeClient(newDSC(stateManaged))
 	ctx := context.Background()
 	state := f.DSCState{
 		Found:         true,
-		OriginalState: "Removed",
-		DSCName:       "default-dsc",
+		OriginalState: stateRemoved,
+		DSCName:       testDSCName,
 	}
 
 	// When: MaybeRestoreDSCState is called.
@@ -275,7 +281,7 @@ func TestMaybeRestoreDSCState_RestoresRemoved(t *testing.T) {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
 	got := getDSCManagementState(t, ctx, cl)
-	if got != "Removed" {
+	if got != stateRemoved {
 		t.Errorf("expected managementState=Removed after restore, got %q", got)
 	}
 }

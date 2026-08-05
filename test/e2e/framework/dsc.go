@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -106,7 +106,7 @@ func MaybeEnsureDSCManaged(ctx context.Context, cl cr.Client) (DSCState, error) 
 	// DSC is cluster-scoped, so no namespace.
 	err := cl.Get(ctx, cr.ObjectKey{Name: dscDefaultName}, dsc)
 	if err != nil {
-		if apierrors.IsNotFound(err) || isNoMatchError(err) {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			log.Printf("[e2e-dsc] DataScienceCluster CRD not found, skipping DSC management (standalone mode)")
 			return state, nil
 		}
@@ -178,7 +178,7 @@ func findCondition(dsc *unstructured.Unstructured, condType string) (status, mes
 		return "", "no status.conditions"
 	}
 	for _, raw := range conditions {
-		c, ok := raw.(map[string]interface{})
+		c, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -233,21 +233,10 @@ func MaybeRestoreDSCState(ctx context.Context, cl cr.Client, state DSCState) err
 	return nil
 }
 
-// isNoMatchError returns true when the error indicates the CRD/GVK is not
-// registered on the cluster (typical for standalone deployments without RHOAI).
-func isNoMatchError(err error) bool {
-	return apierrors.IsNotFound(err) || isNoMatchMsg(err.Error())
-}
-
 func dscGVK() schema.GroupVersionKind {
 	return schema.GroupVersionKind{
 		Group:   "datasciencecluster.opendatahub.io",
 		Version: "v2",
 		Kind:    dscKind,
 	}
-}
-
-func isNoMatchMsg(msg string) bool {
-	return strings.Contains(msg, "no matches for kind") ||
-		strings.Contains(msg, "the server could not find the requested resource")
 }
