@@ -140,31 +140,24 @@ func TestRegisterDSCLifecycle_EnabledByDefault(t *testing.T) {
 // MaybeEnsureDSCManaged tests
 // ---------------------------------------------------------------------------
 
-// TestMaybeEnsureDSCManaged_NoDSC verifies that when no DSC object exists,
-// MaybeEnsureDSCManaged returns DSCState{Found:false} with no error (standalone skip).
+// TestMaybeEnsureDSCManaged_NoDSC verifies that when no DSC object exists
+// (but the CRD is registered), MaybeEnsureDSCManaged returns an error.
 func TestMaybeEnsureDSCManaged_NoDSC(t *testing.T) {
-	// Given: fake client with no objects.
 	cl := newFakeClient()
 	ctx := context.Background()
 
-	// When: MaybeEnsureDSCManaged is called.
-	state, err := f.MaybeEnsureDSCManaged(ctx, cl)
+	_, err := f.MaybeEnsureDSCManaged(ctx, cl)
 
-	// Then: no error, Found=false.
-	if err != nil {
-		t.Fatalf("expected nil error, got: %v", err)
-	}
-	if state.Found {
-		t.Errorf("expected Found=false when DSC object is absent, got Found=true")
+	if err == nil {
+		t.Fatal("expected error when DSC object is missing, got nil")
 	}
 }
 
 // TestMaybeEnsureDSCManaged_AlreadyManaged verifies that when the DSC exists
-// with managementState=Managed, MaybeEnsureDSCManaged returns
-// DSCState{Found:true, OriginalState:stateManaged} and does not patch the object.
+// with managementState=Managed and MCPLifecycleOperatorReady=True,
+// MaybeEnsureDSCManaged returns without patching.
 func TestMaybeEnsureDSCManaged_AlreadyManaged(t *testing.T) {
-	// Given: DSC with managementState=Managed.
-	cl := newFakeClient(newDSC(stateManaged))
+	cl := newFakeClient(newDSCWithCondition(stateManaged, "MCPLifecycleOperatorReady", "True"))
 	ctx := context.Background()
 
 	// When: MaybeEnsureDSCManaged is called.

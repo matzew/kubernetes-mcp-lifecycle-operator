@@ -23,7 +23,6 @@ import (
 	"os"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -106,7 +105,7 @@ func MaybeEnsureDSCManaged(ctx context.Context, cl cr.Client) (DSCState, error) 
 	// DSC is cluster-scoped, so no namespace.
 	err := cl.Get(ctx, cr.ObjectKey{Name: dscDefaultName}, dsc)
 	if err != nil {
-		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+		if apimeta.IsNoMatchError(err) {
 			log.Printf("[e2e-dsc] DataScienceCluster CRD not found, skipping DSC management (standalone mode)")
 			return state, nil
 		}
@@ -121,23 +120,20 @@ func MaybeEnsureDSCManaged(ctx context.Context, cl cr.Client) (DSCState, error) 
 	state.OriginalState = currentState
 	log.Printf("[e2e-dsc] DataScienceCluster %q mcplifecycleoperator.managementState = %q", dscDefaultName, currentState)
 
-	if currentState == stateManaged {
+	if currentState != stateManaged {
+		if err := unstructured.SetNestedField(
+			dsc.Object, stateManaged,
+			"spec", "components", componentPath, "managementState",
+		); err != nil {
+			return state, fmt.Errorf("failed to set managementState: %w", err)
+		}
+		if err := cl.Update(ctx, dsc); err != nil {
+			return state, fmt.Errorf("failed to patch DataScienceCluster to Managed: %w", err)
+		}
+		log.Printf("[e2e-dsc] patched mcplifecycleoperator to Managed")
+	} else {
 		log.Printf("[e2e-dsc] already Managed, no patch needed")
-		return state, nil
 	}
-
-	// Patch to Managed.
-	if err := unstructured.SetNestedField(
-		dsc.Object, stateManaged,
-		"spec", "components", componentPath, "managementState",
-	); err != nil {
-		return state, fmt.Errorf("failed to set managementState: %w", err)
-	}
-
-	if err := cl.Update(ctx, dsc); err != nil {
-		return state, fmt.Errorf("failed to patch DataScienceCluster to Managed: %w", err)
-	}
-	log.Printf("[e2e-dsc] patched mcplifecycleoperator to Managed")
 
 	log.Printf("[e2e-dsc] waiting for %s condition (timeout %s)", condMCPLifecycleOperator, dscReadyWait)
 	if err := waitForDSCCondition(ctx, cl, dscDefaultName, condMCPLifecycleOperator, dscReadyWait); err != nil {
