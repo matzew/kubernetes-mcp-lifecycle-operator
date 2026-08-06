@@ -26,6 +26,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	cr "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -144,28 +145,21 @@ func MaybeEnsureDSCManaged(ctx context.Context, cl cr.Client) (DSCState, error) 
 }
 
 func waitForDSCCondition(ctx context.Context, cl cr.Client, name, condType string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
+	return wait.PollUntilContextTimeout(ctx, 10*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
 		dsc := &unstructured.Unstructured{}
 		dsc.SetGroupVersionKind(dscGVK())
 		if err := cl.Get(ctx, cr.ObjectKey{Name: name}, dsc); err != nil {
-			return fmt.Errorf("failed to get DSC while waiting for %s: %w", condType, err)
+			return false, fmt.Errorf("failed to get DSC while waiting for %s: %w", condType, err)
 		}
 
 		status, msg := findCondition(dsc, condType)
 		if status == "True" {
-			return nil
+			return true, nil
 		}
 
 		log.Printf("[e2e-dsc] %s=%s: %s", condType, status, msg)
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("context cancelled waiting for DSC %s: %w", condType, ctx.Err())
-		case <-time.After(10 * time.Second):
-		}
-	}
-	return fmt.Errorf("DSC %q condition %s did not become True within %s", name, condType, timeout)
+		return false, nil
+	})
 }
 
 func findCondition(dsc *unstructured.Unstructured, condType string) (status, message string) {
