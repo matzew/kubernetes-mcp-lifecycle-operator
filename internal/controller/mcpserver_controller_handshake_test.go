@@ -1796,3 +1796,438 @@ var _ = Describe("MCPServer Controller - TLS Handshake", func() {
 		Expect(k8sClient.Delete(ctx, caSecret)).To(Succeed())
 	})
 })
+
+var _ = Describe("MCPServer Controller - Discover Cache TTL", func() {
+	const resourceName = "test-cache"
+
+	ctx := context.Background()
+
+	typeNamespacedName := types.NamespacedName{
+		Name:      resourceName,
+		Namespace: "default",
+	}
+
+	BeforeEach(func() {
+		resource := &mcpv1alpha1.MCPServer{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      resourceName,
+				Namespace: "default",
+			},
+			Spec: mcpv1alpha1.MCPServerSpec{
+				Source: mcpv1alpha1.Source{
+					Type: mcpv1alpha1.SourceTypeContainerImage,
+					ContainerImage: &mcpv1alpha1.ContainerImageSource{
+						Ref: "docker.io/library/test-image:latest",
+					},
+				},
+				Config: mcpv1alpha1.ServerConfig{
+					Port: 8080,
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+	})
+
+	AfterEach(func() {
+		resource := &mcpv1alpha1.MCPServer{}
+		err := k8sClient.Get(ctx, typeNamespacedName, resource)
+		if err == nil {
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+		}
+
+		deploy := &appsv1.Deployment{}
+		if err := k8sClient.Get(ctx, typeNamespacedName, deploy); err == nil {
+			Expect(k8sClient.Delete(ctx, deploy)).To(Succeed())
+		}
+
+		svc := &corev1.Service{}
+		if err := k8sClient.Get(ctx, typeNamespacedName, svc); err == nil {
+			Expect(k8sClient.Delete(ctx, svc)).To(Succeed())
+		}
+	})
+
+	It("should use cached handshake result within TTL", func() {
+		dialCount := 0
+		reconciler := &MCPServerReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			MCPDialer: func(ctx context.Context, url string, _ *http.Transport) (*mcpv1alpha1.MCPServerInfo, error) {
+				dialCount++
+				return &mcpv1alpha1.MCPServerInfo{
+					Name:            "cached-server",
+					Version:         "1.0.0",
+					ProtocolVersion: "2025-03-26",
+				}, nil
+			},
+			APIReader: k8sClient,
+		}
+
+		By("Initial reconciliation creates deployment")
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Simulating deployment becoming available")
+		deployment := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{
+			Name: resourceName, Namespace: "default",
+		}, deployment)).To(Succeed())
+
+		deployment.Status.Replicas = 1
+		deployment.Status.ReadyReplicas = 1
+		deployment.Status.Conditions = []appsv1.DeploymentCondition{
+			{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+			{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue},
+		}
+		Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+
+		By("First reconcile runs handshake and caches result")
+		dialCount = 0
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dialCount).To(Equal(1))
+
+		By("Verifying cache entry was stored")
+		cacheKey := "default/" + resourceName
+		cached, ok := reconciler.discoverCache.Load(cacheKey)
+		Expect(ok).To(BeTrue())
+		entry := cached.(*discoverCacheEntry)
+		Expect(entry.info.Name).To(Equal("cached-server"))
+		Expect(entry.expiresAt).To(BeTemporally(">", time.Now()))
+
+		By("Bumping generation to force past alreadyVerified check")
+		mcpServer := &mcpv1alpha1.MCPServer{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		mcpServer.Spec.Config.Path = "/mcp-cache-hit"
+		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
+
+		By("Updating cache entry generation to match new generation")
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		reconciler.discoverCache.Store(cacheKey, &discoverCacheEntry{
+			info:       entry.info,
+			expiresAt:  time.Now().Add(30 * time.Minute),
+			generation: mcpServer.Generation,
+			tlsHash:    "",
+		})
+
+		By("Second reconcile should use cache and skip handshake")
+		dialCount = 0
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dialCount).To(Equal(0))
+	})
+
+	It("should re-run handshake when cache entry expires", func() {
+		dialCount := 0
+		reconciler := &MCPServerReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			MCPDialer: func(ctx context.Context, url string, _ *http.Transport) (*mcpv1alpha1.MCPServerInfo, error) {
+				dialCount++
+				return &mcpv1alpha1.MCPServerInfo{
+					Name:            "test-server",
+					ProtocolVersion: "2025-03-26",
+				}, nil
+			},
+			APIReader: k8sClient,
+		}
+
+		By("Initial reconciliation creates deployment")
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Simulating deployment becoming available")
+		deployment := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{
+			Name: resourceName, Namespace: "default",
+		}, deployment)).To(Succeed())
+
+		deployment.Status.Replicas = 1
+		deployment.Status.ReadyReplicas = 1
+		deployment.Status.Conditions = []appsv1.DeploymentCondition{
+			{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+			{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue},
+		}
+		Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+
+		By("First reconcile runs handshake")
+		dialCount = 0
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dialCount).To(Equal(1))
+
+		By("Bumping generation and setting expired cache entry")
+		mcpServer := &mcpv1alpha1.MCPServer{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		mcpServer.Spec.Config.Path = "/mcp-expired"
+		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
+
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		cacheKey := "default/" + resourceName
+		reconciler.discoverCache.Store(cacheKey, &discoverCacheEntry{
+			info: &mcpv1alpha1.MCPServerInfo{
+				Name:            "test-server",
+				ProtocolVersion: "2025-03-26",
+			},
+			expiresAt:  time.Now().Add(-1 * time.Minute), // expired
+			generation: mcpServer.Generation,
+			tlsHash:    "",
+		})
+
+		By("Reconciling with expired cache - handshake must re-run")
+		dialCount = 0
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dialCount).To(Equal(1))
+	})
+
+	It("should invalidate cache on generation change", func() {
+		dialCount := 0
+		reconciler := &MCPServerReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			MCPDialer: func(ctx context.Context, url string, _ *http.Transport) (*mcpv1alpha1.MCPServerInfo, error) {
+				dialCount++
+				return &mcpv1alpha1.MCPServerInfo{
+					Name:            "test-server",
+					ProtocolVersion: "2025-03-26",
+				}, nil
+			},
+			APIReader: k8sClient,
+		}
+
+		By("Initial reconciliation creates deployment")
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Simulating deployment becoming available")
+		deployment := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{
+			Name: resourceName, Namespace: "default",
+		}, deployment)).To(Succeed())
+
+		deployment.Status.Replicas = 1
+		deployment.Status.ReadyReplicas = 1
+		deployment.Status.Conditions = []appsv1.DeploymentCondition{
+			{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+			{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue},
+		}
+		Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+
+		By("First reconcile runs handshake")
+		dialCount = 0
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dialCount).To(Equal(1))
+
+		By("Bumping generation by updating spec")
+		mcpServer := &mcpv1alpha1.MCPServer{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		mcpServer.Spec.Config.Path = "/mcp-gen-change"
+		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
+
+		By("Cache entry has old generation - handshake must re-run")
+		dialCount = 0
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dialCount).To(Equal(1))
+	})
+
+	It("should invalidate cache on TLS hash change", func() {
+		By("Creating a CA bundle Secret with valid PEM")
+		originalPEM := generateSelfSignedCAPEMOnly()
+		caSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "cache-tls-ca",
+				Namespace: "default",
+			},
+			Data: map[string][]byte{"ca.crt": originalPEM},
+		}
+		Expect(k8sClient.Create(ctx, caSecret)).To(Succeed())
+
+		By("Updating MCPServer with TLS caBundleSecret config")
+		mcpServer := &mcpv1alpha1.MCPServer{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		mcpServer.Spec.Transport = &mcpv1alpha1.TransportConfig{
+			TLS: &mcpv1alpha1.TLSClientConfig{
+				Enabled:        true,
+				CABundleSecret: &mcpv1alpha1.SecretReference{Name: "cache-tls-ca"},
+			},
+		}
+		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
+
+		dialCount := 0
+		reconciler := &MCPServerReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			MCPDialer: func(_ context.Context, _ string, _ *http.Transport) (*mcpv1alpha1.MCPServerInfo, error) {
+				dialCount++
+				return &mcpv1alpha1.MCPServerInfo{Name: "test"}, nil
+			},
+			APIReader: k8sClient,
+		}
+
+		By("Initial reconciliation creates deployment")
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Making deployment available")
+		deployment := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{
+			Name: resourceName, Namespace: "default",
+		}, deployment)).To(Succeed())
+
+		deployment.Status.Replicas = 1
+		deployment.Status.ReadyReplicas = 1
+		deployment.Status.Conditions = []appsv1.DeploymentCondition{
+			{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+			{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue},
+		}
+		Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+
+		By("First reconcile runs handshake and caches result")
+		dialCount = 0
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dialCount).To(Equal(1))
+
+		By("Rotating the CA bundle Secret content")
+		Expect(k8sClient.Get(ctx, client.ObjectKey{
+			Name: "cache-tls-ca", Namespace: "default",
+		}, caSecret)).To(Succeed())
+		rotatedPEM := generateSelfSignedCAPEMOnly()
+		caSecret.Data["ca.crt"] = rotatedPEM
+		Expect(k8sClient.Update(ctx, caSecret)).To(Succeed())
+
+		By("Bumping spec generation to bypass alreadyVerified")
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		mcpServer.Spec.Config.Path = "/mcp-rotated"
+		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
+
+		By("Reconciling after TLS rotation - cache entry has old TLS hash, handshake must re-run")
+		dialCount = 0
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dialCount).To(Equal(1))
+
+		By("Cleaning up Secret")
+		Expect(k8sClient.Delete(ctx, caSecret)).To(Succeed())
+	})
+
+	It("should populate cache after successful handshake", func() {
+		reconciler := &MCPServerReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			MCPDialer: func(ctx context.Context, url string, _ *http.Transport) (*mcpv1alpha1.MCPServerInfo, error) {
+				return &mcpv1alpha1.MCPServerInfo{
+					Name:            "cache-test-server",
+					Version:         "2.0.0",
+					ProtocolVersion: "2025-03-26",
+				}, nil
+			},
+			APIReader: k8sClient,
+		}
+
+		By("Initial reconciliation creates deployment")
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Simulating deployment becoming available")
+		deployment := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{
+			Name: resourceName, Namespace: "default",
+		}, deployment)).To(Succeed())
+
+		deployment.Status.Replicas = 1
+		deployment.Status.ReadyReplicas = 1
+		deployment.Status.Conditions = []appsv1.DeploymentCondition{
+			{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+			{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue},
+		}
+		Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+
+		By("Verifying cache is empty before handshake")
+		cacheKey := "default/" + resourceName
+		_, ok := reconciler.discoverCache.Load(cacheKey)
+		Expect(ok).To(BeFalse())
+
+		By("Reconciling to trigger handshake")
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Verifying cache entry is populated with correct values")
+		cached, ok := reconciler.discoverCache.Load(cacheKey)
+		Expect(ok).To(BeTrue())
+		entry := cached.(*discoverCacheEntry)
+		Expect(entry.info).NotTo(BeNil())
+		Expect(entry.info.Name).To(Equal("cache-test-server"))
+		Expect(entry.info.Version).To(Equal("2.0.0"))
+		Expect(entry.info.ProtocolVersion).To(Equal("2025-03-26"))
+		Expect(entry.expiresAt).To(BeTemporally("~", time.Now().Add(maxDiscoverTTL), 5*time.Second))
+
+		mcpServer := &mcpv1alpha1.MCPServer{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		Expect(entry.generation).To(Equal(mcpServer.Generation))
+	})
+
+	It("should clean up cache when MCPServer is deleted", func() {
+		reconciler := &MCPServerReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			MCPDialer: func(ctx context.Context, url string, _ *http.Transport) (*mcpv1alpha1.MCPServerInfo, error) {
+				return &mcpv1alpha1.MCPServerInfo{Name: "test"}, nil
+			},
+			APIReader: k8sClient,
+		}
+
+		By("Pre-populating cache for the resource")
+		cacheKey := "default/" + resourceName
+		reconciler.discoverCache.Store(cacheKey, &discoverCacheEntry{
+			info:       &mcpv1alpha1.MCPServerInfo{Name: "test"},
+			expiresAt:  time.Now().Add(30 * time.Minute),
+			generation: 1,
+		})
+
+		By("Deleting the MCPServer")
+		mcpServer := &mcpv1alpha1.MCPServer{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, mcpServer)).To(Succeed())
+
+		By("Reconciling after deletion")
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Verifying cache entry was removed")
+		_, ok := reconciler.discoverCache.Load(cacheKey)
+		Expect(ok).To(BeFalse())
+	})
+})

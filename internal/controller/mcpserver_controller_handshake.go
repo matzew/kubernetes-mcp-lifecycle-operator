@@ -33,6 +33,12 @@ import (
 	mcpv1alpha1 "github.com/kubernetes-sigs/mcp-lifecycle-operator/api/v1alpha1"
 )
 
+const (
+	// maxDiscoverTTL caps the maximum cache duration for discover results.
+	// Even if a server reports a longer TTL, the operator won't cache beyond this.
+	maxDiscoverTTL = 1 * time.Hour
+)
+
 // reconcileHandshake performs the MCP handshake when the deployment is available,
 // skipping it when the endpoint was already verified for the current generation.
 func (r *MCPServerReconciler) reconcileHandshake(
@@ -73,6 +79,18 @@ func (r *MCPServerReconciler) reconcileHandshake(
 
 	if readyCondition.Status != metav1.ConditionTrue || readyCondition.Reason != ReasonAvailable {
 		return readyCondition, nil
+	}
+
+	// Check discover cache for a valid entry
+	if cached, ok := r.discoverCache.Load(key); ok {
+		entry := cached.(*discoverCacheEntry)
+		if time.Now().Before(entry.expiresAt) &&
+			entry.generation == mcpServer.Generation &&
+			entry.tlsHash == tlsCABundleHash {
+			handshakeTotal.With(withResult(metricLabels, "cache_hit")).Inc()
+			logger.V(1).Info("Using cached handshake result", "expiresAt", entry.expiresAt)
+			return readyCondition, entry.info
+		}
 	}
 
 	var tlsTransport *http.Transport
@@ -142,6 +160,18 @@ func (r *MCPServerReconciler) reconcileHandshake(
 	}
 	logger.Info("MCP endpoint verified successfully", "url", mcpURL, "protocolVersion", protocolVersion)
 	auditHandshakeSuccess(ctx, mcpServer, mcpURL, info, elapsed)
+
+	// Cache the handshake result. The SDK's DiscoverResult may include a TTL;
+	// for now we use a fixed TTL since the operator uses InitializeResult()
+	// which doesn't expose TTL. When the SDK surfaces DiscoverResult TTL,
+	// this can be updated to use min(serverTTL, maxDiscoverTTL).
+	r.discoverCache.Store(key, &discoverCacheEntry{
+		info:       info,
+		expiresAt:  time.Now().Add(maxDiscoverTTL),
+		generation: mcpServer.Generation,
+		tlsHash:    tlsCABundleHash,
+	})
+
 	return readyCondition, info
 }
 

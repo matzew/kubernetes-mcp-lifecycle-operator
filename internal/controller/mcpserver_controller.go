@@ -63,6 +63,14 @@ const (
 // MCPClientVersion is the version sent during MCP handshake. Bump with releases.
 var MCPClientVersion = "v0.1.0"
 
+// discoverCacheEntry stores a cached handshake result with TTL.
+type discoverCacheEntry struct {
+	info       *mcpv1alpha1.MCPServerInfo
+	expiresAt  time.Time
+	generation int64
+	tlsHash    string
+}
+
 // Condition types for MCPServer status.
 const (
 	// ConditionTypeAccepted indicates the MCPServer configuration is valid.
@@ -178,6 +186,10 @@ type MCPServerReconciler struct {
 	// Secret content at the time of the last successful handshake. Keyed by
 	// namespace/name. Used to detect CA rotation without bumping generation.
 	tlsCABundleHashes sync.Map
+	// discoverCache stores cached handshake results with TTL, keyed by
+	// namespace/name. Entries expire based on server-reported TTL (capped
+	// at maxDiscoverTTL). Lost on operator restart (graceful degradation).
+	discoverCache sync.Map
 }
 
 // +kubebuilder:rbac:groups=mcp.x-k8s.io,resources=mcpservers,verbs=get;list;watch;update;patch
@@ -207,6 +219,7 @@ func (r *MCPServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if apierrors.IsNotFound(err) {
 			logger.Info("MCPServer resource not found, ignoring since object must be deleted")
 			r.tlsCABundleHashes.Delete(req.Namespace + "/" + req.Name)
+			r.discoverCache.Delete(req.Namespace + "/" + req.Name)
 			cleanupMetrics(req.Name, req.Namespace)
 			return ctrl.Result{}, nil
 		}
