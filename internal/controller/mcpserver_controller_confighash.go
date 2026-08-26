@@ -256,6 +256,14 @@ func extractSecretNames(obj client.Object) []string {
 		name := mcpServer.Spec.Transport.TLS.CABundleSecret.Name
 		if !seen[name] {
 			secrets = append(secrets, name)
+			seen[name] = true
+		}
+	}
+
+	if mcpServer.Spec.Auth != nil && mcpServer.Spec.Auth.HandshakeToken != nil {
+		name := mcpServer.Spec.Auth.HandshakeToken.SecretRef.Name
+		if !seen[name] {
+			secrets = append(secrets, name)
 		}
 	}
 

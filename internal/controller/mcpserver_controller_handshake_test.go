@@ -1795,4 +1795,120 @@ var _ = Describe("MCPServer Controller - TLS Handshake", func() {
 		By("Cleaning up Secret")
 		Expect(k8sClient.Delete(ctx, caSecret)).To(Succeed())
 	})
+
+	It("should fail handshake when handshake token Secret is not found", func() {
+		By("Updating MCPServer with auth.handshakeToken referencing nonexistent Secret")
+		mcpServer := &mcpv1alpha1.MCPServer{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		mcpServer.Spec.Auth = &mcpv1alpha1.AuthConfig{
+			HandshakeToken: &mcpv1alpha1.HandshakeTokenConfig{
+				SecretRef: mcpv1alpha1.SecretReference{Name: "nonexistent-token"},
+				Key:       "token",
+			},
+		}
+		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
+
+		reconciler := &MCPServerReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			MCPDialer: func(_ context.Context, _ string, _ *http.Transport) (*mcpv1alpha1.MCPServerInfo, error) {
+				return &mcpv1alpha1.MCPServerInfo{Name: "test"}, nil
+			},
+			APIReader: k8sClient,
+		}
+
+		By("Creating deployment and making it available")
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		deployment := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{
+			Name: resourceName, Namespace: "default",
+		}, deployment)).To(Succeed())
+
+		deployment.Status.Replicas = 1
+		deployment.Status.ReadyReplicas = 1
+		deployment.Status.Conditions = []appsv1.DeploymentCondition{
+			{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+			{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue},
+		}
+		Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+
+		By("Reconciling - handshake should fail due to missing Secret")
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		readyCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, ConditionTypeReady)
+		Expect(readyCondition).NotTo(BeNil())
+		Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
+		Expect(readyCondition.Reason).To(Equal(ReasonMCPEndpointUnavailable))
+		Expect(readyCondition.Message).To(ContainSubstring("Failed to read handshake token Secret"))
+		Expect(readyCondition.Message).To(ContainSubstring("nonexistent-token"))
+	})
+
+	It("should fail handshake when handshake token Secret key is missing", func() {
+		By("Creating a Secret without the expected key")
+		tokenSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "token-secret-bad-key",
+				Namespace: "default",
+			},
+			Data: map[string][]byte{
+				"wrong-key": []byte("my-bearer-token"),
+			},
+		}
+		Expect(k8sClient.Create(ctx, tokenSecret)).To(Succeed())
+
+		By("Updating MCPServer with auth.handshakeToken referencing the Secret")
+		mcpServer := &mcpv1alpha1.MCPServer{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		mcpServer.Spec.Auth = &mcpv1alpha1.AuthConfig{
+			HandshakeToken: &mcpv1alpha1.HandshakeTokenConfig{
+				SecretRef: mcpv1alpha1.SecretReference{Name: "token-secret-bad-key"},
+				Key:       "token",
+			},
+		}
+		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
+
+		reconciler := &MCPServerReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			MCPDialer: func(_ context.Context, _ string, _ *http.Transport) (*mcpv1alpha1.MCPServerInfo, error) {
+				return &mcpv1alpha1.MCPServerInfo{Name: "test"}, nil
+			},
+			APIReader: k8sClient,
+		}
+
+		By("Creating deployment and making it available")
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		deployment := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{
+			Name: resourceName, Namespace: "default",
+		}, deployment)).To(Succeed())
+
+		deployment.Status.Replicas = 1
+		deployment.Status.ReadyReplicas = 1
+		deployment.Status.Conditions = []appsv1.DeploymentCondition{
+			{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+			{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue},
+		}
+		Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+
+		By("Reconciling - handshake should fail due to missing key")
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		readyCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, ConditionTypeReady)
+		Expect(readyCondition).NotTo(BeNil())
+		Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
+		Expect(readyCondition.Reason).To(Equal(ReasonMCPEndpointUnavailable))
+		Expect(readyCondition.Message).To(ContainSubstring("Key \"token\" not found in handshake token Secret"))
+
+		By("Cleaning up Secret")
+		Expect(k8sClient.Delete(ctx, tokenSecret)).To(Succeed())
+	})
 })

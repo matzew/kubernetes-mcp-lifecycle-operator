@@ -1728,4 +1728,110 @@ var _ = Describe("MCPServer Controller - Deployment Reconcile Events", func() {
 			g.Expect(secondDeploymentFailedEvent).NotTo(Equal(deploymentFailedEvent))
 		}).Should(Succeed())
 	})
+
+	It("should add projected token volume when auth.tokenProjection is set", func() {
+		mcpServer := newTestMCPServer("test-token-projection")
+		expSeconds := int64(7200)
+		mcpServer.Spec.Auth = &mcpv1alpha1.AuthConfig{
+			TokenProjection: &mcpv1alpha1.TokenProjectionConfig{
+				Audience:          "https://mcp.example.com",
+				ExpirationSeconds: &expSeconds,
+				MountPath:         "/custom/token/path",
+			},
+		}
+
+		reconciler := &MCPServerReconciler{
+			Client:    k8sClient,
+			Scheme:    k8sClient.Scheme(),
+			APIReader: k8sClient,
+		}
+
+		deployment, err := reconciler.createDeployment(mcpServer)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("verifying the projected volume exists")
+		var tokenVolume *corev1.Volume
+		for i := range deployment.Spec.Template.Spec.Volumes {
+			if deployment.Spec.Template.Spec.Volumes[i].Name == tokenProjectionVolumeName {
+				tokenVolume = &deployment.Spec.Template.Spec.Volumes[i]
+				break
+			}
+		}
+		Expect(tokenVolume).NotTo(BeNil(), "expected mcp-token volume")
+		Expect(tokenVolume.Projected).NotTo(BeNil())
+		Expect(tokenVolume.Projected.Sources).To(HaveLen(1))
+		Expect(tokenVolume.Projected.Sources[0].ServiceAccountToken).NotTo(BeNil())
+		Expect(tokenVolume.Projected.Sources[0].ServiceAccountToken.Audience).To(Equal("https://mcp.example.com"))
+		Expect(*tokenVolume.Projected.Sources[0].ServiceAccountToken.ExpirationSeconds).To(Equal(int64(7200)))
+		Expect(tokenVolume.Projected.Sources[0].ServiceAccountToken.Path).To(Equal("token"))
+
+		By("verifying the volume mount exists")
+		container := deployment.Spec.Template.Spec.Containers[0]
+		var tokenMount *corev1.VolumeMount
+		for i := range container.VolumeMounts {
+			if container.VolumeMounts[i].Name == tokenProjectionVolumeName {
+				tokenMount = &container.VolumeMounts[i]
+				break
+			}
+		}
+		Expect(tokenMount).NotTo(BeNil(), "expected mcp-token volume mount")
+		Expect(tokenMount.MountPath).To(Equal("/custom/token/path"))
+		Expect(tokenMount.ReadOnly).To(BeTrue())
+	})
+
+	It("should use default mount path and expiration when not specified", func() {
+		mcpServer := newTestMCPServer("test-token-projection-defaults")
+		mcpServer.Spec.Auth = &mcpv1alpha1.AuthConfig{
+			TokenProjection: &mcpv1alpha1.TokenProjectionConfig{
+				Audience: "https://mcp.example.com",
+			},
+		}
+
+		reconciler := &MCPServerReconciler{
+			Client:    k8sClient,
+			Scheme:    k8sClient.Scheme(),
+			APIReader: k8sClient,
+		}
+
+		deployment, err := reconciler.createDeployment(mcpServer)
+		Expect(err).NotTo(HaveOccurred())
+
+		var tokenVolume *corev1.Volume
+		for i := range deployment.Spec.Template.Spec.Volumes {
+			if deployment.Spec.Template.Spec.Volumes[i].Name == tokenProjectionVolumeName {
+				tokenVolume = &deployment.Spec.Template.Spec.Volumes[i]
+				break
+			}
+		}
+		Expect(tokenVolume).NotTo(BeNil())
+		Expect(*tokenVolume.Projected.Sources[0].ServiceAccountToken.ExpirationSeconds).To(Equal(int64(3600)))
+
+		container := deployment.Spec.Template.Spec.Containers[0]
+		var tokenMount *corev1.VolumeMount
+		for i := range container.VolumeMounts {
+			if container.VolumeMounts[i].Name == tokenProjectionVolumeName {
+				tokenMount = &container.VolumeMounts[i]
+				break
+			}
+		}
+		Expect(tokenMount).NotTo(BeNil())
+		Expect(tokenMount.MountPath).To(Equal("/var/run/secrets/mcp/token"))
+	})
+
+	It("should not add projected token volume when auth is nil", func() {
+		mcpServer := newTestMCPServer("test-no-token-projection")
+
+		reconciler := &MCPServerReconciler{
+			Client:    k8sClient,
+			Scheme:    k8sClient.Scheme(),
+			APIReader: k8sClient,
+		}
+
+		deployment, err := reconciler.createDeployment(mcpServer)
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, vol := range deployment.Spec.Template.Spec.Volumes {
+			Expect(vol.Name).NotTo(Equal(tokenProjectionVolumeName), "unexpected mcp-token volume when auth is nil")
+		}
+	})
 })

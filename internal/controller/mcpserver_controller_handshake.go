@@ -26,8 +26,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/prometheus/client_golang/prometheus"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	mcpv1alpha1 "github.com/kubernetes-sigs/mcp-lifecycle-operator/api/v1alpha1"
@@ -101,9 +103,57 @@ func (r *MCPServerReconciler) reconcileHandshake(
 		}
 	}
 
+	// Read handshake bearer token from Secret if configured
+	var bearerToken string
+	if mcpServer.Spec.Auth != nil && mcpServer.Spec.Auth.HandshakeToken != nil {
+		ht := mcpServer.Spec.Auth.HandshakeToken
+		secret := &corev1.Secret{}
+		secretKey := client.ObjectKey{
+			Namespace: mcpServer.Namespace,
+			Name:      ht.SecretRef.Name,
+		}
+		if err := r.APIReader.Get(ctx, secretKey, secret); err != nil {
+			handshakeTotal.With(withResult(metricLabels, "failure")).Inc()
+			logger.Info("Failed to read handshake token Secret", "secret", ht.SecretRef.Name, "error", err)
+			cond := newCondition(
+				ConditionTypeReady,
+				metav1.ConditionFalse,
+				ReasonMCPEndpointUnavailable,
+				fmt.Sprintf("Failed to read handshake token Secret %q: %v", ht.SecretRef.Name, err),
+				mcpServer.Generation,
+			)
+			preserveLastTransitionTime(&cond, mcpServer.Status.Conditions)
+			return cond, nil
+		}
+		key := ht.Key
+		if key == "" {
+			key = "token"
+		}
+		tokenBytes, ok := secret.Data[key]
+		if !ok {
+			handshakeTotal.With(withResult(metricLabels, "failure")).Inc()
+			cond := newCondition(
+				ConditionTypeReady,
+				metav1.ConditionFalse,
+				ReasonMCPEndpointUnavailable,
+				fmt.Sprintf("Key %q not found in handshake token Secret %q", key, ht.SecretRef.Name),
+				mcpServer.Generation,
+			)
+			preserveLastTransitionTime(&cond, mcpServer.Status.Conditions)
+			return cond, nil
+		}
+		bearerToken = string(tokenBytes)
+	}
+
 	dialer := r.MCPDialer
 	if dialer == nil {
-		dialer = r.verifyMCPEndpoint
+		if bearerToken != "" {
+			dialer = func(ctx context.Context, url string, transport *http.Transport) (*mcpv1alpha1.MCPServerInfo, error) {
+				return r.verifyMCPEndpointWithAuth(ctx, url, transport, bearerToken)
+			}
+		} else {
+			dialer = r.verifyMCPEndpoint
+		}
 	}
 	dialCtx, dialCancel := context.WithTimeout(ctx, mcpHandshakeTimeout)
 	defer dialCancel()
@@ -191,6 +241,63 @@ func (r *MCPServerReconciler) verifyMCPEndpoint(ctx context.Context, url string,
 	// Cancel the connection context before closing the session. session.Close
 	// blocks until the reader goroutine exits; cancelling the context causes
 	// the reader to return immediately instead of waiting on the HTTP stream.
+	defer func() {
+		connCancel()
+		_ = session.Close()
+	}()
+
+	return extractServerInfo(session.InitializeResult()), nil
+}
+
+// bearerAuthTransport wraps an http.RoundTripper to add a Bearer token header.
+type bearerAuthTransport struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (t *bearerAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r := req.Clone(req.Context())
+	r.Header.Set("Authorization", "Bearer "+t.token)
+	return t.base.RoundTrip(r)
+}
+
+// verifyMCPEndpointWithAuth performs an MCP handshake with a bearer token
+// injected into every HTTP request via a wrapping RoundTripper.
+func (r *MCPServerReconciler) verifyMCPEndpointWithAuth(ctx context.Context, url string, httpTransport *http.Transport, bearerToken string) (*mcpv1alpha1.MCPServerInfo, error) {
+	connCtx, connCancel := context.WithCancel(ctx)
+
+	mcpClient := mcp.NewClient(
+		&mcp.Implementation{
+			Name:    mcpClientName,
+			Version: MCPClientVersion,
+		},
+		nil,
+	)
+
+	var base http.RoundTripper
+	if httpTransport != nil {
+		base = httpTransport
+	} else {
+		base = http.DefaultTransport
+	}
+
+	httpClient := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &bearerAuthTransport{base: base, token: bearerToken},
+	}
+
+	transport := &mcp.StreamableClientTransport{
+		Endpoint:             url,
+		HTTPClient:           httpClient,
+		DisableStandaloneSSE: true,
+		MaxRetries:           -1,
+	}
+
+	session, err := mcpClient.Connect(connCtx, transport, nil)
+	if err != nil {
+		connCancel()
+		return nil, err
+	}
 	defer func() {
 		connCancel()
 		_ = session.Close()

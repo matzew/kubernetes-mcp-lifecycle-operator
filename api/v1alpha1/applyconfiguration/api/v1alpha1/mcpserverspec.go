@@ -48,6 +48,8 @@ type MCPServerSpecApplyConfiguration struct {
 	// Transport configures transport-layer settings for
 	// operator-to-MCP-server communication.
 	Transport *TransportConfigApplyConfiguration `json:"transport,omitempty"`
+	// Auth configures authentication for the MCP server.
+	Auth *AuthConfigApplyConfiguration `json:"auth,omitempty"`
 }
 
 // MCPServerSpecApplyConfiguration constructs a declarative configuration of the MCPServerSpec type for use with
@@ -129,5 +131,13 @@ func (b *MCPServerSpecApplyConfiguration) WithNetwork(value *NetworkConfigApplyC
 // If called multiple times, the Transport field is set to the value of the last call.
 func (b *MCPServerSpecApplyConfiguration) WithTransport(value *TransportConfigApplyConfiguration) *MCPServerSpecApplyConfiguration {
 	b.Transport = value
+	return b
+}
+
+// WithAuth sets the Auth field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Auth field is set to the value of the last call.
+func (b *MCPServerSpecApplyConfiguration) WithAuth(value *AuthConfigApplyConfiguration) *MCPServerSpecApplyConfiguration {
+	b.Auth = value
 	return b
 }

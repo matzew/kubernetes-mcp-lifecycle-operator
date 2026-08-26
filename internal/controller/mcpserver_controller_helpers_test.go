@@ -561,5 +561,60 @@ var _ = Describe("ConfigMap/Secret index extractors", func() {
 			}
 			Expect(count).To(Equal(1))
 		})
+
+		It("should include handshake token Secret", func() {
+			mcpServer := &mcpv1alpha1.MCPServer{
+				Spec: mcpv1alpha1.MCPServerSpec{
+					Config: mcpv1alpha1.ServerConfig{
+						Port: 8080,
+					},
+					Auth: &mcpv1alpha1.AuthConfig{
+						HandshakeToken: &mcpv1alpha1.HandshakeTokenConfig{
+							SecretRef: mcpv1alpha1.SecretReference{
+								Name: "handshake-token",
+							},
+						},
+					},
+				},
+			}
+
+			names := extractSecretNames(mcpServer)
+			Expect(names).To(ContainElement("handshake-token"))
+		})
+
+		It("should deduplicate handshake token Secret with other Secret references", func() {
+			mcpServer := &mcpv1alpha1.MCPServer{
+				Spec: mcpv1alpha1.MCPServerSpec{
+					Config: mcpv1alpha1.ServerConfig{
+						Port: 8080,
+						EnvFrom: []corev1.EnvFromSource{
+							{
+								SecretRef: &corev1.SecretEnvSource{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: "shared-secret",
+									},
+								},
+							},
+						},
+					},
+					Auth: &mcpv1alpha1.AuthConfig{
+						HandshakeToken: &mcpv1alpha1.HandshakeTokenConfig{
+							SecretRef: mcpv1alpha1.SecretReference{
+								Name: "shared-secret",
+							},
+						},
+					},
+				},
+			}
+
+			names := extractSecretNames(mcpServer)
+			count := 0
+			for _, n := range names {
+				if n == "shared-secret" {
+					count++
+				}
+			}
+			Expect(count).To(Equal(1))
+		})
 	})
 })

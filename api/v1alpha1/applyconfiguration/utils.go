@@ -32,8 +32,12 @@ import (
 func ForKind(kind schema.GroupVersionKind) interface{} {
 	switch kind {
 	// Group=mcp.x-k8s.io, Version=v1alpha1
+	case v1alpha1.SchemeGroupVersion.WithKind("AuthConfig"):
+		return &apiv1alpha1.AuthConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ContainerImageSource"):
 		return &apiv1alpha1.ContainerImageSourceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("HandshakeTokenConfig"):
+		return &apiv1alpha1.HandshakeTokenConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("HealthConfig"):
 		return &apiv1alpha1.HealthConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("MCPConfig"):
@@ -68,6 +72,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.StorageSourceApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("TLSClientConfig"):
 		return &apiv1alpha1.TLSClientConfigApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("TokenProjectionConfig"):
+		return &apiv1alpha1.TokenProjectionConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("TransportConfig"):
 		return &apiv1alpha1.TransportConfigApplyConfiguration{}
 

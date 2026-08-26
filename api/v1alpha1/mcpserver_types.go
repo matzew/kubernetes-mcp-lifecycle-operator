@@ -409,6 +409,63 @@ type TransportConfig struct {
 	TLS *TLSClientConfig `json:"tls,omitempty"`
 }
 
+// TokenProjectionConfig configures ServiceAccount token projection with a
+// custom audience. The projected token is mounted into the MCP server
+// container for workload identity federation.
+type TokenProjectionConfig struct {
+	// Audience is the intended audience of the projected token.
+	// Required when tokenProjection is set.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Audience string `json:"audience"`
+
+	// ExpirationSeconds is the requested duration of validity of the
+	// projected token. Defaults to 3600 (1 hour). Must be at least 600
+	// (10 minutes) per Kubernetes minimum.
+	// +optional
+	// +kubebuilder:validation:Minimum=600
+	// +kubebuilder:default=3600
+	ExpirationSeconds *int64 `json:"expirationSeconds,omitempty"`
+
+	// MountPath is the container path where the projected token is mounted.
+	// Defaults to /var/run/secrets/mcp/token.
+	// +optional
+	// +kubebuilder:default="/var/run/secrets/mcp/token"
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=4096
+	// +kubebuilder:validation:XValidation:rule="self.startsWith('/')",message="mountPath must be an absolute path (must start with '/')"
+	// +kubebuilder:validation:XValidation:rule="!self.contains(':')",message="mountPath must not contain ':' character"
+	MountPath string `json:"mountPath,omitempty"`
+}
+
+// HandshakeTokenConfig configures a bearer token for the operator's MCP
+// handshake request. The token is read from a Secret.
+type HandshakeTokenConfig struct {
+	// SecretRef references the Secret containing the bearer token.
+	// +kubebuilder:validation:Required
+	SecretRef SecretReference `json:"secretRef"`
+
+	// Key is the key within the Secret data. Defaults to "token".
+	// +optional
+	// +kubebuilder:default="token"
+	Key string `json:"key,omitempty"`
+}
+
+// AuthConfig configures authentication for the MCP server. At least one
+// of tokenProjection or handshakeToken must be specified.
+// +kubebuilder:validation:MinProperties=1
+type AuthConfig struct {
+	// TokenProjection configures ServiceAccount token projection with a
+	// custom audience for workload identity federation.
+	// +optional
+	TokenProjection *TokenProjectionConfig `json:"tokenProjection,omitempty"`
+
+	// HandshakeToken configures a bearer token from a Secret for the
+	// operator's MCP handshake request.
+	// +optional
+	HandshakeToken *HandshakeTokenConfig `json:"handshakeToken,omitempty"`
+}
+
 // MCPServerSpec defines the desired state of MCPServer.
 type MCPServerSpec struct {
 	// ExtraLabels are applied to the Deployment metadata, PodTemplate metadata, and Service metadata.
@@ -449,6 +506,10 @@ type MCPServerSpec struct {
 	// operator-to-MCP-server communication.
 	// +optional
 	Transport *TransportConfig `json:"transport,omitempty"`
+
+	// Auth configures authentication for the MCP server.
+	// +optional
+	Auth *AuthConfig `json:"auth,omitempty"`
 }
 
 // MCPConfig defines Model Context Protocol specific properties of the server.

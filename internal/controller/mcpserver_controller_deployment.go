@@ -35,6 +35,9 @@ import (
 	mcpv1alpha1 "github.com/kubernetes-sigs/mcp-lifecycle-operator/api/v1alpha1"
 )
 
+// tokenProjectionVolumeName is the volume name for projected ServiceAccount tokens.
+const tokenProjectionVolumeName = "mcp-token"
+
 // reconcileDeployment creates or updates the Deployment for the MCPServer
 // and returns the current state of the deployment.
 func (r *MCPServerReconciler) reconcileDeployment(
@@ -320,6 +323,46 @@ func (r *MCPServerReconciler) createDeployment(mcpServer *mcpv1alpha1.MCPServer)
 	// Process storage mounts
 	volumes, volumeMounts := r.processStorageMounts(mcpServer)
 	container.VolumeMounts = volumeMounts
+
+	// Add projected ServiceAccount token volume for workload identity
+	if mcpServer.Spec.Auth != nil && mcpServer.Spec.Auth.TokenProjection != nil {
+		tp := mcpServer.Spec.Auth.TokenProjection
+
+		mountPath := tp.MountPath
+		if mountPath == "" {
+			mountPath = "/var/run/secrets/mcp/token"
+		}
+
+		expirationSeconds := int64(3600)
+		if tp.ExpirationSeconds != nil {
+			expirationSeconds = *tp.ExpirationSeconds
+		}
+
+		tokenVolume := corev1.Volume{
+			Name: tokenProjectionVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{
+					Sources: []corev1.VolumeProjection{
+						{
+							ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+								Audience:          tp.Audience,
+								ExpirationSeconds: &expirationSeconds,
+								Path:              "token",
+							},
+						},
+					},
+				},
+			},
+		}
+		volumes = append(volumes, tokenVolume)
+
+		tokenMount := corev1.VolumeMount{
+			Name:      "mcp-token",
+			MountPath: mountPath,
+			ReadOnly:  true,
+		}
+		container.VolumeMounts = append(container.VolumeMounts, tokenMount)
+	}
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
