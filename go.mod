@@ -2,7 +2,7 @@ module github.com/kubernetes-sigs/mcp-lifecycle-operator
 
 go 1.26.0
 
-toolchain go1.27.1
+toolchain go1.26.7
 
 require (
 	github.com/go-logr/logr v1.4.4
