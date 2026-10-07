@@ -34,7 +34,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	mcpv1alpha1 "github.com/kubernetes-sigs/mcp-lifecycle-operator/api/v1alpha1"
+	mcpv1beta1 "github.com/kubernetes-sigs/mcp-lifecycle-operator/api/v1beta1"
 )
 
 var _ = Describe("MCPServer Controller - Error Recovery", func() {
@@ -62,7 +62,7 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 		})
 
 		AfterEach(func() {
-			resource := &mcpv1alpha1.MCPServer{}
+			resource := &mcpv1beta1.MCPServer{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			if err == nil {
 				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
@@ -88,17 +88,17 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying status is Failed")
-			mcpServer := &mcpv1alpha1.MCPServer{}
+			mcpServer := &mcpv1beta1.MCPServer{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
 			acceptedCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Accepted")
 			Expect(acceptedCondition).NotTo(BeNil())
 			Expect(acceptedCondition.Status).To(Equal(metav1.ConditionFalse))
 			Expect(acceptedCondition.Reason).To(Equal("Invalid"))
 			Expect(acceptedCondition.Message).To(ContainSubstring("recovery-configmap"))
-			readyCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Ready")
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
-			Expect(readyCondition.Reason).To(Equal("ConfigurationInvalid"))
+			availableCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Available")
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(availableCondition.Reason).To(Equal("ConfigurationInvalid"))
 
 			By("Verifying no Deployment was created")
 			deployment := &appsv1.Deployment{}
@@ -124,9 +124,9 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 			Expect(acceptedCondition).NotTo(BeNil())
 			Expect(acceptedCondition.Status).To(Equal(metav1.ConditionTrue))
 			Expect(acceptedCondition.Reason).To(Equal("Valid"))
-			readyCondition = meta.FindStatusCondition(mcpServer.Status.Conditions, "Ready")
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Reason).To(Equal("Initializing"))
+			availableCondition = meta.FindStatusCondition(mcpServer.Status.Conditions, "Available")
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Reason).To(Equal("Initializing"))
 
 			By("Verifying Deployment was created on recovery")
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: "default"}, deployment)).To(Succeed())
@@ -155,7 +155,7 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 		})
 
 		AfterEach(func() {
-			resource := &mcpv1alpha1.MCPServer{}
+			resource := &mcpv1beta1.MCPServer{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			if err == nil {
 				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
@@ -181,17 +181,17 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying status is Failed")
-			mcpServer := &mcpv1alpha1.MCPServer{}
+			mcpServer := &mcpv1beta1.MCPServer{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
 			acceptedCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Accepted")
 			Expect(acceptedCondition).NotTo(BeNil())
 			Expect(acceptedCondition.Status).To(Equal(metav1.ConditionFalse))
 			Expect(acceptedCondition.Reason).To(Equal("Invalid"))
 			Expect(acceptedCondition.Message).To(ContainSubstring("recovery-secret"))
-			readyCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Ready")
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
-			Expect(readyCondition.Reason).To(Equal("ConfigurationInvalid"))
+			availableCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Available")
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(availableCondition.Reason).To(Equal("ConfigurationInvalid"))
 
 			By("Verifying no Deployment was created")
 			deployment := &appsv1.Deployment{}
@@ -217,9 +217,9 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 			Expect(acceptedCondition).NotTo(BeNil())
 			Expect(acceptedCondition.Status).To(Equal(metav1.ConditionTrue))
 			Expect(acceptedCondition.Reason).To(Equal("Valid"))
-			readyCondition = meta.FindStatusCondition(mcpServer.Status.Conditions, "Ready")
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Reason).To(Equal("Initializing"))
+			availableCondition = meta.FindStatusCondition(mcpServer.Status.Conditions, "Available")
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Reason).To(Equal("Initializing"))
 
 			By("Verifying Deployment was created on recovery")
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: "default"}, deployment)).To(Succeed())
@@ -237,11 +237,11 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 
 		BeforeEach(func() {
 			resource := newTestMCPServer(resourceName)
-			resource.Spec.Config.Storage = []mcpv1alpha1.StorageMount{
+			resource.Spec.Config.Storage = []mcpv1beta1.StorageMount{
 				{
 					Path: "/etc/config",
-					Source: mcpv1alpha1.StorageSource{
-						Type: mcpv1alpha1.StorageTypeConfigMap,
+					Source: mcpv1beta1.StorageSource{
+						Type: mcpv1beta1.StorageTypeConfigMap,
 						ConfigMap: &corev1.ConfigMapVolumeSource{
 							LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
 						},
@@ -252,7 +252,7 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 		})
 
 		AfterEach(func() {
-			resource := &mcpv1alpha1.MCPServer{}
+			resource := &mcpv1beta1.MCPServer{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			if err == nil {
 				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
@@ -278,17 +278,17 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying status is Failed")
-			mcpServer := &mcpv1alpha1.MCPServer{}
+			mcpServer := &mcpv1beta1.MCPServer{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
 			acceptedCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Accepted")
 			Expect(acceptedCondition).NotTo(BeNil())
 			Expect(acceptedCondition.Status).To(Equal(metav1.ConditionFalse))
 			Expect(acceptedCondition.Reason).To(Equal("Invalid"))
 			Expect(acceptedCondition.Message).To(ContainSubstring("recovery-storage-cm"))
-			readyCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Ready")
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
-			Expect(readyCondition.Reason).To(Equal("ConfigurationInvalid"))
+			availableCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Available")
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(availableCondition.Reason).To(Equal("ConfigurationInvalid"))
 
 			By("Creating the missing ConfigMap")
 			configMap := &corev1.ConfigMap{
@@ -309,9 +309,9 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 			Expect(acceptedCondition).NotTo(BeNil())
 			Expect(acceptedCondition.Status).To(Equal(metav1.ConditionTrue))
 			Expect(acceptedCondition.Reason).To(Equal("Valid"))
-			readyCondition = meta.FindStatusCondition(mcpServer.Status.Conditions, "Ready")
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Reason).To(Equal("Initializing"))
+			availableCondition = meta.FindStatusCondition(mcpServer.Status.Conditions, "Available")
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Reason).To(Equal("Initializing"))
 
 			By("Verifying Deployment was created on recovery")
 			deployment := &appsv1.Deployment{}
@@ -345,7 +345,7 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 		})
 
 		AfterEach(func() {
-			resource := &mcpv1alpha1.MCPServer{}
+			resource := &mcpv1beta1.MCPServer{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			if err == nil {
 				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
@@ -371,17 +371,17 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying status is Failed")
-			mcpServer := &mcpv1alpha1.MCPServer{}
+			mcpServer := &mcpv1beta1.MCPServer{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
 			acceptedCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Accepted")
 			Expect(acceptedCondition).NotTo(BeNil())
 			Expect(acceptedCondition.Status).To(Equal(metav1.ConditionFalse))
 			Expect(acceptedCondition.Reason).To(Equal("Invalid"))
 			Expect(acceptedCondition.Message).To(ContainSubstring(configMapName))
-			readyCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Ready")
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
-			Expect(readyCondition.Reason).To(Equal("ConfigurationInvalid"))
+			availableCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Available")
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(availableCondition.Reason).To(Equal("ConfigurationInvalid"))
 
 			By("Verifying no Deployment was created")
 			deployment := &appsv1.Deployment{}
@@ -407,9 +407,9 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 			Expect(acceptedCondition).NotTo(BeNil())
 			Expect(acceptedCondition.Status).To(Equal(metav1.ConditionTrue))
 			Expect(acceptedCondition.Reason).To(Equal("Valid"))
-			readyCondition = meta.FindStatusCondition(mcpServer.Status.Conditions, "Ready")
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Reason).To(Equal("Initializing"))
+			availableCondition = meta.FindStatusCondition(mcpServer.Status.Conditions, "Available")
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Reason).To(Equal("Initializing"))
 
 			By("Verifying Deployment was created on recovery")
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: "default"}, deployment)).To(Succeed())
@@ -442,7 +442,7 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 		})
 
 		AfterEach(func() {
-			resource := &mcpv1alpha1.MCPServer{}
+			resource := &mcpv1beta1.MCPServer{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			if err == nil {
 				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
@@ -468,17 +468,17 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Verifying status is Failed")
-			mcpServer := &mcpv1alpha1.MCPServer{}
+			mcpServer := &mcpv1beta1.MCPServer{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
 			acceptedCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Accepted")
 			Expect(acceptedCondition).NotTo(BeNil())
 			Expect(acceptedCondition.Status).To(Equal(metav1.ConditionFalse))
 			Expect(acceptedCondition.Reason).To(Equal("Invalid"))
 			Expect(acceptedCondition.Message).To(ContainSubstring(secretName))
-			readyCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Ready")
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
-			Expect(readyCondition.Reason).To(Equal("ConfigurationInvalid"))
+			availableCondition := meta.FindStatusCondition(mcpServer.Status.Conditions, "Available")
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(availableCondition.Reason).To(Equal("ConfigurationInvalid"))
 
 			By("Verifying no Deployment was created")
 			deployment := &appsv1.Deployment{}
@@ -504,9 +504,9 @@ var _ = Describe("MCPServer Controller - Error Recovery", func() {
 			Expect(acceptedCondition).NotTo(BeNil())
 			Expect(acceptedCondition.Status).To(Equal(metav1.ConditionTrue))
 			Expect(acceptedCondition.Reason).To(Equal("Valid"))
-			readyCondition = meta.FindStatusCondition(mcpServer.Status.Conditions, "Ready")
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Reason).To(Equal("Initializing"))
+			availableCondition = meta.FindStatusCondition(mcpServer.Status.Conditions, "Available")
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Reason).To(Equal("Initializing"))
 
 			By("Verifying Deployment was created on recovery")
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: resourceName, Namespace: "default"}, deployment)).To(Succeed())
@@ -530,7 +530,7 @@ var _ = Describe("MCPServer Controller - Optimistic Locking Conflicts", func() {
 	})
 
 	AfterEach(func() {
-		resource := &mcpv1alpha1.MCPServer{}
+		resource := &mcpv1beta1.MCPServer{}
 		err := k8sClient.Get(ctx, typeNamespacedName, resource)
 		if err == nil {
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
@@ -547,7 +547,7 @@ var _ = Describe("MCPServer Controller - Optimistic Locking Conflicts", func() {
 		}
 	})
 
-	It("should return conflict error when deployment update encounters optimistic locking conflict", func() {
+	It("should requeue without a reconcile error on a transient deployment update conflict", func() {
 		By("Initial reconcile to create resources")
 		initialReconciler := &MCPServerReconciler{
 			Client:    k8sClient,
@@ -560,7 +560,7 @@ var _ = Describe("MCPServer Controller - Optimistic Locking Conflicts", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("Updating MCPServer spec to trigger a deployment update")
-		mcpServer := &mcpv1alpha1.MCPServer{}
+		mcpServer := &mcpv1beta1.MCPServer{}
 		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
 		mcpServer.Spec.Config.Env = []corev1.EnvVar{{Name: "CONFLICT_VAR", Value: "value"}}
 		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
@@ -591,11 +591,12 @@ var _ = Describe("MCPServer Controller - Optimistic Locking Conflicts", func() {
 		}
 
 		By("Reconciling with conflict interceptor")
-		_, err = conflictReconciler.Reconcile(ctx, reconcile.Request{
+		result, err := conflictReconciler.Reconcile(ctx, reconcile.Request{
 			NamespacedName: typeNamespacedName,
 		})
-		Expect(err).To(HaveOccurred())
-		Expect(errors.IsConflict(err)).To(BeTrue())
+		Expect(err).NotTo(HaveOccurred(),
+			"a transient conflict must not surface as a reconcile error (avoids false alerts, issue #87)")
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0), "conflict must trigger a requeue")
 		Expect(updateCallCount).To(Equal(1))
 	})
 
@@ -612,7 +613,7 @@ var _ = Describe("MCPServer Controller - Optimistic Locking Conflicts", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("Updating MCPServer spec to trigger a deployment update")
-		mcpServer := &mcpv1alpha1.MCPServer{}
+		mcpServer := &mcpv1beta1.MCPServer{}
 		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
 		mcpServer.Spec.Config.Env = []corev1.EnvVar{{Name: "RETRY_VAR", Value: "value"}}
 		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
@@ -644,12 +645,13 @@ var _ = Describe("MCPServer Controller - Optimistic Locking Conflicts", func() {
 			APIReader: k8sClient,
 		}
 
-		By("First reconcile fails with conflict")
-		_, err = conflictReconciler.Reconcile(ctx, reconcile.Request{
+		By("First reconcile hits the conflict and requeues without error")
+		result, err := conflictReconciler.Reconcile(ctx, reconcile.Request{
 			NamespacedName: typeNamespacedName,
 		})
-		Expect(err).To(HaveOccurred())
-		Expect(errors.IsConflict(err)).To(BeTrue())
+		Expect(err).NotTo(HaveOccurred(),
+			"a transient conflict must not surface as a reconcile error (avoids false alerts, issue #87)")
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0), "conflict must trigger a requeue")
 
 		By("Second reconcile succeeds (conflict resolved)")
 		_, err = conflictReconciler.Reconcile(ctx, reconcile.Request{
@@ -665,7 +667,7 @@ var _ = Describe("MCPServer Controller - Optimistic Locking Conflicts", func() {
 		))
 	})
 
-	It("should return conflict error when service update encounters optimistic locking conflict", func() {
+	It("should requeue without a reconcile error on a transient service update conflict", func() {
 		By("Initial reconcile to create resources")
 		initialReconciler := &MCPServerReconciler{
 			Client:    k8sClient,
@@ -678,7 +680,7 @@ var _ = Describe("MCPServer Controller - Optimistic Locking Conflicts", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("Updating MCPServer port to trigger a service update")
-		mcpServer := &mcpv1alpha1.MCPServer{}
+		mcpServer := &mcpv1beta1.MCPServer{}
 		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
 		mcpServer.Spec.Config.Port = 9090
 		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
@@ -709,11 +711,142 @@ var _ = Describe("MCPServer Controller - Optimistic Locking Conflicts", func() {
 		}
 
 		By("Reconciling with conflict interceptor")
-		_, err = conflictReconciler.Reconcile(ctx, reconcile.Request{
+		result, err := conflictReconciler.Reconcile(ctx, reconcile.Request{
 			NamespacedName: typeNamespacedName,
 		})
-		Expect(err).To(HaveOccurred())
-		Expect(errors.IsConflict(err)).To(BeTrue())
+		Expect(err).NotTo(HaveOccurred(),
+			"a transient conflict must not surface as a reconcile error (avoids false alerts, issue #87)")
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0), "conflict must trigger a requeue")
 		Expect(updateCallCount).To(Equal(1))
+	})
+
+	It("should not flicker the Available condition to False on a transient deployment update conflict", func() {
+		By("Initial reconcile to create resources")
+		initialReconciler := &MCPServerReconciler{
+			Client:    k8sClient,
+			Scheme:    k8sClient.Scheme(),
+			APIReader: k8sClient,
+		}
+		_, err := initialReconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Capturing the baseline Available condition after a successful reconcile")
+		mcpServer := &mcpv1beta1.MCPServer{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		baseline := meta.FindStatusCondition(mcpServer.Status.Conditions, ConditionTypeAvailable)
+		Expect(baseline).NotTo(BeNil())
+		Expect(baseline.Status).NotTo(Equal(metav1.ConditionFalse))
+		baselineReason := baseline.Reason
+		baselineMessage := baseline.Message
+		baselineTransition := baseline.LastTransitionTime
+
+		By("Updating MCPServer spec to trigger a deployment update")
+		mcpServer.Spec.Config.Env = []corev1.EnvVar{{Name: "FLICKER_VAR", Value: "value"}}
+		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
+
+		By("Creating interceptor that returns conflict on deployment Update")
+		wrappedClient, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		interceptedClient := interceptor.NewClient(wrappedClient, interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if _, ok := obj.(*appsv1.Deployment); ok {
+					return errors.NewConflict(
+						schema.GroupResource{Group: "apps", Resource: "deployments"},
+						obj.GetName(),
+						fmt.Errorf("the object has been modified"),
+					)
+				}
+				return c.Update(ctx, obj, opts...)
+			},
+		})
+		conflictReconciler := &MCPServerReconciler{
+			Client:    interceptedClient,
+			Scheme:    k8sClient.Scheme(),
+			APIReader: k8sClient,
+		}
+
+		By("Reconciling with the conflict interceptor")
+		result, err := conflictReconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred(),
+			"a transient conflict must not surface as a reconcile error (avoids false alerts, issue #87)")
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0), "conflict must trigger a requeue")
+
+		By("Verifying the Available condition was preserved (no flicker to False)")
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		after := meta.FindStatusCondition(mcpServer.Status.Conditions, ConditionTypeAvailable)
+		Expect(after).NotTo(BeNil())
+		Expect(after.Reason).NotTo(Equal(ReasonDeploymentUnavailable),
+			"transient optimistic-lock conflict must not flip Available to DeploymentUnavailable")
+		Expect(after.Status).NotTo(Equal(metav1.ConditionFalse))
+		Expect(after.Reason).To(Equal(baselineReason))
+		Expect(after.Message).To(Equal(baselineMessage))
+		Expect(after.LastTransitionTime).To(Equal(baselineTransition))
+	})
+
+	It("should not flicker the Available condition to False on a transient service update conflict", func() {
+		By("Initial reconcile to create resources")
+		initialReconciler := &MCPServerReconciler{
+			Client:    k8sClient,
+			Scheme:    k8sClient.Scheme(),
+			APIReader: k8sClient,
+		}
+		_, err := initialReconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Capturing the baseline Available condition after a successful reconcile")
+		mcpServer := &mcpv1beta1.MCPServer{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		baseline := meta.FindStatusCondition(mcpServer.Status.Conditions, ConditionTypeAvailable)
+		Expect(baseline).NotTo(BeNil())
+		Expect(baseline.Status).NotTo(Equal(metav1.ConditionFalse))
+		baselineReason := baseline.Reason
+
+		By("Updating MCPServer port to trigger a service update")
+		mcpServer.Spec.Config.Port = 9090
+		Expect(k8sClient.Update(ctx, mcpServer)).To(Succeed())
+
+		By("Creating interceptor that returns conflict on service Update")
+		wrappedClient, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		interceptedClient := interceptor.NewClient(wrappedClient, interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if _, ok := obj.(*corev1.Service); ok {
+					return errors.NewConflict(
+						schema.GroupResource{Group: "", Resource: "services"},
+						obj.GetName(),
+						fmt.Errorf("the object has been modified"),
+					)
+				}
+				return c.Update(ctx, obj, opts...)
+			},
+		})
+		conflictReconciler := &MCPServerReconciler{
+			Client:    interceptedClient,
+			Scheme:    k8sClient.Scheme(),
+			APIReader: k8sClient,
+		}
+
+		By("Reconciling with the conflict interceptor")
+		result, err := conflictReconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: typeNamespacedName,
+		})
+		Expect(err).NotTo(HaveOccurred(),
+			"a transient conflict must not surface as a reconcile error (avoids false alerts, issue #87)")
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0), "conflict must trigger a requeue")
+
+		By("Verifying the Available condition was preserved (no flicker to False)")
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+		after := meta.FindStatusCondition(mcpServer.Status.Conditions, ConditionTypeAvailable)
+		Expect(after).NotTo(BeNil())
+		Expect(after.Reason).NotTo(Equal(ReasonServiceUnavailable),
+			"transient optimistic-lock conflict must not flip Available to ServiceUnavailable")
+		Expect(after.Status).NotTo(Equal(metav1.ConditionFalse))
+		Expect(after.Reason).To(Equal(baselineReason))
 	})
 })

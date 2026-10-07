@@ -26,12 +26,54 @@ const (
 // in operator-created Deployments.
 const ManagedWorkloadName = "mcp-server"
 
+// Metric label and structured-log field keys. The same value is used both as a
+// Prometheus label name and as a logr key so metrics and logs stay correlated.
+const (
+	keyName      = "name"
+	keyNamespace = "namespace"
+	keyReason    = "reason"
+	keyPhase     = "phase"
+	keyType      = "type"
+	keyStatus    = "status"
+)
+
 // ReconcilePhase is the value for the "phase" label on mcpserver_reconcile_phase_duration_seconds.
 const (
-	ReconcilePhaseValidation    = "validation"
-	ReconcilePhaseDeployment    = "deployment"
-	ReconcilePhaseService       = "service"
-	ReconcilePhaseNetworkPolicy = "networkpolicy"
+	ReconcilePhaseValidation     = "validation"
+	ReconcilePhaseDeployment     = "deployment"
+	ReconcilePhaseService        = "service"
+	ReconcilePhaseNetworkPolicy  = "networkpolicy"
+	ReconcilePhaseGatewayBinding = "gatewaybinding"
+)
+
+// Gateway integration condition types and reasons.
+const (
+	ConditionTypeRegistered        = "Registered"
+	ConditionTypeGatewayRegistered = "GatewayRegistered"
+
+	ReasonGatewayRegistered      = "GatewayRegistered"
+	ReasonGatewayNotRegistered   = "GatewayNotRegistered"
+	ReasonGatewayBindingNotFound = "BindingNotFound"
+	ReasonPublicAddressPending   = "PublicAddressPending"
+)
+
+// NetworkPolicy posture condition type and reasons. This is an informational,
+// administrator-visible signal reporting whether the operator-managed
+// NetworkPolicy restricts ingress sources and egress destinations. It never
+// gates readiness (Available is computed independently).
+const (
+	ConditionTypeNetworkPolicyRestricted = "NetworkPolicyRestricted"
+
+	// ReasonNetworkPolicyRestricted (status True): both ingress source and egress
+	// destination are restricted (least-privilege).
+	ReasonNetworkPolicyRestricted = "Restricted"
+	// ReasonNetworkPolicyIngressUnrestricted (status False): ingress allows any source.
+	ReasonNetworkPolicyIngressUnrestricted = "IngressUnrestricted"
+	// ReasonNetworkPolicyEgressUnrestricted (status False): egress allows any destination.
+	ReasonNetworkPolicyEgressUnrestricted = "EgressUnrestricted"
+	// ReasonNetworkPolicyUnrestricted (status False): both directions are unrestricted
+	// (the default when Spec.Network is unset).
+	ReasonNetworkPolicyUnrestricted = "Unrestricted"
 )
 
 // MetricReasonReconcileError is the `reason` label on deployment/service failure counters
