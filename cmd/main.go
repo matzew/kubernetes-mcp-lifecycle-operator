@@ -39,8 +39,18 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+
 	mcpv1alpha1 "github.com/kubernetes-sigs/mcp-lifecycle-operator/api/v1alpha1"
+	mcpv1beta1 "github.com/kubernetes-sigs/mcp-lifecycle-operator/api/v1beta1"
 	"github.com/kubernetes-sigs/mcp-lifecycle-operator/internal/controller"
+	"github.com/kubernetes-sigs/mcp-lifecycle-operator/internal/controller/providers"
+	webhookpolicy "github.com/kubernetes-sigs/mcp-lifecycle-operator/internal/webhook"
+
+	// Gateway integration providers register themselves via init().
+	// Add new providers here as blank imports.
+	_ "github.com/kubernetes-sigs/mcp-lifecycle-operator/internal/controller/providers/httproute"
+	_ "github.com/kubernetes-sigs/mcp-lifecycle-operator/internal/controller/providers/kuadrant"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -53,6 +63,8 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(mcpv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(mcpv1beta1.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -65,6 +77,15 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var loggingConfigMapName string
+	var loggingConfigMapNamespace string
+	var loggingConfigMapKey string
+	var enableWebhook bool
+	var imageAllowlist string
+	var requireImageDigest bool
+	var maxStorageMounts int
+	var requiredLabels string
+	var networkPolicyDefaultPosture string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -83,11 +104,48 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&loggingConfigMapName, "logging-configmap-name", defaultLoggingConfigMapName,
+		"Name of the ConfigMap to watch for runtime log level changes. Set to empty to disable.")
+	flag.StringVar(&loggingConfigMapNamespace, "logging-configmap-namespace", "",
+		"Namespace of the logging ConfigMap. Defaults to the operator pod namespace.")
+	flag.StringVar(&loggingConfigMapKey, "logging-configmap-key", defaultLoggingConfigMapKey,
+		"Key in the logging ConfigMap that holds the log level.")
+	flag.BoolVar(&enableWebhook, "enable-webhook", false,
+		"If set, the validating admission webhook for MCPServer is registered. "+
+			"Requires TLS certificates to be available (e.g. via cert-manager).")
+	flag.StringVar(&imageAllowlist, "image-allowlist", "",
+		"Comma-separated list of allowed image registry prefixes for MCPServer validation webhook. "+
+			"Falls back to IMAGE_ALLOWLIST env var if not set. Empty means no restriction.")
+	flag.BoolVar(&requireImageDigest, "require-image-digest", false,
+		"If set, the validation webhook rejects MCPServer images that do not use digest references (@sha256:...). "+
+			"Falls back to REQUIRE_IMAGE_DIGEST env var if not set.")
+	flag.IntVar(&maxStorageMounts, "max-storage-mounts", -1,
+		"Maximum number of storage mounts allowed per MCPServer. "+
+			"Falls back to MAX_STORAGE_MOUNTS env var if not set. -1 means no limit.")
+	flag.StringVar(&requiredLabels, "required-labels", "",
+		"Comma-separated list of labels that must be present on MCPServer resources. "+
+			"Falls back to REQUIRED_LABELS env var if not set. Empty means no requirement.")
+	flag.StringVar(&networkPolicyDefaultPosture, "network-policy-default-posture", "open",
+		"Default NetworkPolicy posture applied to a managed workload when a network dimension is left "+
+			"unconfigured. \"open\" keeps the historical default; \"restricted\" denies unconfigured ingress by "+
+			"default. Under \"restricted\", set Spec.Network.IngressFrom to include peers matching the operator "+
+			"pods and each required gateway source; otherwise an enforcing CNI blocks the operator handshake and "+
+			"gateway traffic, so the server never becomes Verified and status.address/ServerReady are not "+
+			"published. Unconfigured egress is left unmanaged. Explicit Spec.Network values are always honored.")
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
+	atomicLevel := extractAtomicLevel(&opts)
+	opts.Level = &atomicLevel
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	defaultPosture, err := controller.ParseDefaultPosture(networkPolicyDefaultPosture)
+	if err != nil {
+		setupLog.Error(err, "invalid --network-policy-default-posture value")
+		os.Exit(1)
+	}
+	setupLog.Info("NetworkPolicy default posture configured", "posture", defaultPosture)
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -161,11 +219,18 @@ func main() {
 		metricsServerOptions.KeyName = metricsCertKey
 	}
 
+	cacheOptions, err := controller.CacheOptions()
+	if err != nil {
+		setupLog.Error(err, "unable to build cache options")
+		os.Exit(1)
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
+		Cache:                  cacheOptions,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "bed7462b.x-k8s.io",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
@@ -186,11 +251,29 @@ func main() {
 	}
 
 	reconciler := &controller.MCPServerReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
-		Recorder:   mgr.GetEventRecorder("mcpserver-controller"),
-		APIReader:  mgr.GetAPIReader(),
-		TLSProfile: tlsCfg.tlsConfigFunc(),
+		Client:                      mgr.GetClient(),
+		Scheme:                      mgr.GetScheme(),
+		Recorder:                    mgr.GetEventRecorder("mcpserver-controller"),
+		APIReader:                   mgr.GetAPIReader(),
+		TLSProfile:                  tlsCfg.tlsConfigFunc(),
+		NetworkPolicyDefaultPosture: defaultPosture,
+		// Operator identity for the restricted-posture self ingress peer, so the
+		// MCP verification handshake can reach an operand that declares no ingress
+		// source of its own. These are the controller Deployment's own
+		// selector.matchLabels (config/manager/manager.yaml): Kubernetes forbids
+		// mutating a Deployment selector after creation, so the operator pod is
+		// guaranteed to carry them. The podSelector matches on a label subset, so
+		// extra labels added by a deployment overlay keep the match valid.
+		OperatorNamespace: detectOperatorNamespace(),
+		OperatorPodLabels: map[string]string{
+			"control-plane":          "controller-manager",
+			"app.kubernetes.io/name": "mcp-lifecycle-operator",
+		},
+	}
+	if defaultPosture == controller.PostureRestricted && reconciler.OperatorNamespace == "" {
+		setupLog.Info("Restricted NetworkPolicy posture is set but the operator namespace could not be " +
+			"determined; operator verification traffic to operands without an explicit ingress source will " +
+			"be blocked and they may never become Ready")
 	}
 	if strings.EqualFold(os.Getenv("PROPAGATE_TLS_ENV_VARS"), "true") {
 		reconciler.TLSEnvVars = tlsCfg.envVars()
@@ -199,6 +282,21 @@ func main() {
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MCPServer")
+		os.Exit(1)
+	}
+	if err := providers.SetupAll(mgr); err != nil {
+		setupLog.Error(err, "unable to set up gateway providers")
+		os.Exit(1)
+	}
+	if enableWebhook {
+		admissionPolicy := parseAdmissionFlags(imageAllowlist, requireImageDigest, maxStorageMounts, requiredLabels)
+		if err := mcpv1alpha1.SetupWebhookWithManager(mgr, admissionPolicy); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "MCPServer")
+			os.Exit(1)
+		}
+	}
+	if err := (&mcpv1beta1.MCPServer{}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "MCPServer")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
@@ -212,9 +310,36 @@ func main() {
 		os.Exit(1)
 	}
 
+	loggingNamespace := resolveLoggingNamespace(loggingConfigMapNamespace)
+	if err := setupLogLevelFromConfigMap(mgr, atomicLevel, loggingNamespace, loggingConfigMapName, loggingConfigMapKey); err != nil {
+		setupLog.Error(err, "unable to set up runtime log level sync")
+		os.Exit(1)
+	}
+
+	// No-op in the production binary; only the coverage build (-tags e2ecoverage)
+	// registers a real Runnable. See cmd/coverage.go / cmd/coverage_noop.go and #177.
+	startCoverageFlushing(mgr)
+
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func parseAdmissionFlags(imageAllowlist string, requireImageDigest bool, maxStorageMounts int, requiredLabels string) *webhookpolicy.AdmissionPolicy {
+	policy := webhookpolicy.ParseAdmissionPolicy(setupLog, webhookpolicy.PolicyFlags{
+		ImageAllowlist:     imageAllowlist,
+		RequireImageDigest: requireImageDigest,
+		MaxStorageMounts:   maxStorageMounts,
+		RequiredLabels:     requiredLabels,
+	})
+	if policy.HasActiveRules() {
+		setupLog.Info("Admission webhook policy configured",
+			"imageAllowlist", policy.ImageAllowlist,
+			"requireImageDigest", policy.RequireImageDigest,
+			"maxStorageMounts", policy.MaxStorageMounts,
+			"requiredLabels", policy.RequiredLabels)
+	}
+	return policy
 }

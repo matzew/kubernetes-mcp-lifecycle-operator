@@ -20,6 +20,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -35,8 +36,11 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
-	mcpv1alpha1 "github.com/kubernetes-sigs/mcp-lifecycle-operator/api/v1alpha1"
+	mcpv1beta1 "github.com/kubernetes-sigs/mcp-lifecycle-operator/api/v1beta1"
 	f "github.com/kubernetes-sigs/mcp-lifecycle-operator/test/e2e/framework"
+	"github.com/kubernetes-sigs/mcp-lifecycle-operator/test/e2e/framework/labels/category"
+	"github.com/kubernetes-sigs/mcp-lifecycle-operator/test/e2e/framework/labels/scenario"
+	"github.com/kubernetes-sigs/mcp-lifecycle-operator/test/e2e/framework/labels/speed"
 )
 
 const configHashAnnotation = "mcp.x-k8s.io/config-hash"
@@ -48,8 +52,9 @@ func TestImageUpdate(t *testing.T) {
 	imageRef := f.AlternateMCPServerImage
 
 	feature := features.New("MCPServer image update").
-		WithLabel("type", "reconciliation").
-		WithLabel("scenario", "image-update").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Slow).
+		WithLabel(scenario.Label, scenario.SpecUpdate).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			return f.SetupMCPServer(ctx, t, cfg, "img-update", true)
 		}).
@@ -62,7 +67,7 @@ func TestImageUpdate(t *testing.T) {
 				t.Fatalf("test misconfigured: initial image %q is the same as update target", oldImage)
 			}
 
-			f.UpdateWithRetry(ctx, t, r, server, func(s *mcpv1alpha1.MCPServer) {
+			f.UpdateWithRetry(ctx, t, r, server, func(s *mcpv1beta1.MCPServer) {
 				s.Spec.Source.ContainerImage.Ref = imageRef
 			})
 			t.Logf("updated image from %s to %s", oldImage, imageRef)
@@ -78,8 +83,8 @@ func TestImageUpdate(t *testing.T) {
 			if err := r.Get(ctx, server.Name, server.Namespace, server); err != nil {
 				t.Fatalf("failed to re-fetch MCPServer: %v", err)
 			}
-			if server.Status.ObservedGeneration < server.Generation {
-				t.Fatalf("expected observedGeneration >= %d, got %d",
+			if server.Status.ObservedGeneration != server.Generation {
+				t.Fatalf("expected observedGeneration == %d, got %d",
 					server.Generation, server.Status.ObservedGeneration)
 			}
 
@@ -111,8 +116,9 @@ func TestImageUpdate(t *testing.T) {
 func TestStorageAddition(t *testing.T) {
 	t.Parallel()
 	feature := features.New("MCPServer storage addition").
-		WithLabel("type", "reconciliation").
-		WithLabel("scenario", "storage-add").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Moderate).
+		WithLabel(scenario.Label, scenario.SpecUpdate).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			ns := ctx.Value(f.NsKey).(string)
 			r := cfg.Client().Resources()
@@ -131,13 +137,13 @@ func TestStorageAddition(t *testing.T) {
 			server := f.ServerFromContext(ctx)
 			r := cfg.Client().Resources()
 
-			f.UpdateWithRetry(ctx, t, r, server, func(s *mcpv1alpha1.MCPServer) {
-				s.Spec.Config.Storage = []mcpv1alpha1.StorageMount{
+			f.UpdateWithRetry(ctx, t, r, server, func(s *mcpv1beta1.MCPServer) {
+				s.Spec.Config.Storage = []mcpv1beta1.StorageMount{
 					{
 						Path:        "/etc/added-config",
-						Permissions: mcpv1alpha1.MountPermissionsReadOnly,
-						Source: mcpv1alpha1.StorageSource{
-							Type: mcpv1alpha1.StorageTypeConfigMap,
+						Permissions: mcpv1beta1.MountPermissionsReadOnly,
+						Source: mcpv1beta1.StorageSource{
+							Type: mcpv1beta1.StorageTypeConfigMap,
 							ConfigMap: &corev1.ConfigMapVolumeSource{
 								LocalObjectReference: corev1.LocalObjectReference{Name: "add-config"},
 							},
@@ -199,8 +205,9 @@ func TestStorageAddition(t *testing.T) {
 func TestStorageRemoval(t *testing.T) {
 	t.Parallel()
 	feature := features.New("MCPServer storage removal").
-		WithLabel("type", "reconciliation").
-		WithLabel("scenario", "storage-remove").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Moderate).
+		WithLabel(scenario.Label, scenario.SpecUpdate).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			ns := ctx.Value(f.NsKey).(string)
 			r := cfg.Client().Resources()
@@ -214,11 +221,11 @@ func TestStorageRemoval(t *testing.T) {
 			}
 
 			return f.SetupMCPServer(ctx, t, cfg, "storage-rm", true,
-				f.WithStorage(mcpv1alpha1.StorageMount{
+				f.WithStorage(mcpv1beta1.StorageMount{
 					Path:        "/etc/remove-config",
-					Permissions: mcpv1alpha1.MountPermissionsReadOnly,
-					Source: mcpv1alpha1.StorageSource{
-						Type: mcpv1alpha1.StorageTypeConfigMap,
+					Permissions: mcpv1beta1.MountPermissionsReadOnly,
+					Source: mcpv1beta1.StorageSource{
+						Type: mcpv1beta1.StorageTypeConfigMap,
 						ConfigMap: &corev1.ConfigMapVolumeSource{
 							LocalObjectReference: corev1.LocalObjectReference{Name: "remove-config"},
 						},
@@ -230,7 +237,7 @@ func TestStorageRemoval(t *testing.T) {
 			server := f.ServerFromContext(ctx)
 			r := cfg.Client().Resources()
 
-			f.UpdateWithRetry(ctx, t, r, server, func(s *mcpv1alpha1.MCPServer) {
+			f.UpdateWithRetry(ctx, t, r, server, func(s *mcpv1beta1.MCPServer) {
 				s.Spec.Config.Storage = nil
 			})
 			t.Log("removed storage mount")
@@ -278,8 +285,9 @@ func TestStorageRemoval(t *testing.T) {
 func TestReplicaDrift(t *testing.T) {
 	t.Parallel()
 	feature := features.New("MCPServer replica drift correction").
-		WithLabel("type", "reconciliation").
-		WithLabel("scenario", "drift-replicas").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Moderate).
+		WithLabel(scenario.Label, scenario.Drift).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			return f.SetupMCPServer(ctx, t, cfg, "drift-repl", true, f.WithReplicas(1))
 		}).
@@ -324,8 +332,9 @@ func TestReplicaDrift(t *testing.T) {
 func TestServicePortDrift(t *testing.T) {
 	t.Parallel()
 	feature := features.New("MCPServer Service port drift correction").
-		WithLabel("type", "reconciliation").
-		WithLabel("scenario", "drift-service-port").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Moderate).
+		WithLabel(scenario.Label, scenario.Drift).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			return f.SetupMCPServer(ctx, t, cfg, "drift-port", true)
 		}).
@@ -367,11 +376,65 @@ func TestServicePortDrift(t *testing.T) {
 	testenv.Test(t, feature)
 }
 
+func TestServiceSelectorDrift(t *testing.T) {
+	t.Parallel()
+	feature := features.New("MCPServer Service selector drift correction").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Moderate).
+		WithLabel(scenario.Label, scenario.Drift).
+		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			return f.SetupMCPServer(ctx, t, cfg, "drift-selector", true)
+		}).
+		Assess("manually change Service selector and verify reconciliation", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			server := f.ServerFromContext(ctx)
+			r := cfg.Client().Resources()
+
+			svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: server.Name, Namespace: server.Namespace}}
+			if err := r.Get(ctx, server.Name, server.Namespace, svc); err != nil {
+				t.Fatalf("Service not found: %v", err)
+			}
+			originalClusterIP := svc.Spec.ClusterIP
+
+			f.UpdateWithRetry(ctx, t, r, svc, func(s *corev1.Service) {
+				s.Spec.Selector = map[string]string{
+					"mcp-server": "wrong",
+					"unexpected": "value",
+				}
+			})
+			t.Log("manually changed Service selector")
+
+			err := wait.For(
+				conditions.New(r).ResourceMatch(svc, func(obj k8s.Object) bool {
+					s := obj.(*corev1.Service)
+					return len(s.Spec.Selector) == 1 &&
+						s.Spec.Selector["mcp-server"] == server.Name &&
+						s.Spec.ClusterIP == originalClusterIP
+				}),
+				wait.WithTimeout(2*time.Minute),
+				wait.WithInterval(2*time.Second),
+			)
+			if err != nil {
+				t.Fatalf("controller did not reconcile Service selector back to mcp-server=%s: %v", server.Name, err)
+			}
+
+			f.WaitForEndpointsReady(ctx, t, cfg, server.Namespace, server.Name)
+			t.Logf("controller restored Service selector and endpoints for %s", server.Name)
+			return ctx
+		}).
+		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			return f.TeardownMCPServer(ctx, t, cfg)
+		}).
+		Feature()
+
+	testenv.Test(t, feature)
+}
+
 func TestDeploymentDeletion(t *testing.T) {
 	t.Parallel()
 	feature := features.New("MCPServer Deployment recreation after deletion").
-		WithLabel("type", "reconciliation").
-		WithLabel("scenario", "drift-deployment-deleted").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Slow).
+		WithLabel(scenario.Label, scenario.Drift).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			return f.SetupMCPServer(ctx, t, cfg, "drift-dep", true)
 		}).
@@ -406,8 +469,8 @@ func TestDeploymentDeletion(t *testing.T) {
 				t.Fatalf("controller did not recreate Deployment: %v", err)
 			}
 
-			f.WaitForMCPServerCondition(ctx, t, r, server, "Ready", metav1.ConditionTrue)
-			t.Logf("Deployment recreated with new UID=%s, MCPServer is Ready", newDep.UID)
+			f.WaitForMCPServerCondition(ctx, t, r, server, "Available", metav1.ConditionTrue)
+			t.Logf("Deployment recreated with new UID=%s, MCPServer is Available", newDep.UID)
 			return ctx
 		}).
 		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -421,8 +484,9 @@ func TestDeploymentDeletion(t *testing.T) {
 func TestServiceDeletion(t *testing.T) {
 	t.Parallel()
 	feature := features.New("MCPServer Service recreation after deletion").
-		WithLabel("type", "reconciliation").
-		WithLabel("scenario", "drift-service-deleted").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Moderate).
+		WithLabel(scenario.Label, scenario.Drift).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			return f.SetupMCPServer(ctx, t, cfg, "drift-svc", true)
 		}).
@@ -456,8 +520,8 @@ func TestServiceDeletion(t *testing.T) {
 				t.Fatalf("controller did not recreate Service: %v", err)
 			}
 
-			f.WaitForMCPServerCondition(ctx, t, r, server, "Ready", metav1.ConditionTrue)
-			t.Logf("Service recreated with new UID=%s, MCPServer is Ready", newSvc.UID)
+			f.WaitForMCPServerCondition(ctx, t, r, server, "Available", metav1.ConditionTrue)
+			t.Logf("Service recreated with new UID=%s, MCPServer is Available", newSvc.UID)
 			return ctx
 		}).
 		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
@@ -468,13 +532,91 @@ func TestServiceDeletion(t *testing.T) {
 	testenv.Test(t, feature)
 }
 
+// TestRapidSpecUpdatesConvergeAvailable stresses the reconciler with a burst of
+// back-to-back spec updates. Each update triggers a Deployment update, and under
+// contention the controller can hit optimistic-lock conflicts against its cached
+// copy. This is the real-world scenario behind issue #87: such conflicts must be
+// treated as transient (requeue) and must never leave the MCPServer stuck in a
+// non-Available state. After the churn settles, the server must converge back to
+// Available=True and Verified=True.
+//
+// Note: an optimistic-lock conflict cannot be deterministically injected against
+// a real operator pod (that requires an in-process client interceptor, which the
+// unit tests use). This test is a regression guard that the conflict path never
+// wedges the server; the deterministic conflict coverage lives in the unit tests.
+func TestRapidSpecUpdatesConvergeAvailable(t *testing.T) {
+	t.Parallel()
+	feature := features.New("MCPServer converges to Available under rapid spec updates").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Slow).
+		WithLabel(scenario.Label, scenario.SpecUpdate).
+		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			return f.SetupMCPServer(ctx, t, cfg, "rapid-update", true, f.WithReplicas(1))
+		}).
+		Assess("server stays reconcilable and converges to Available after a burst of updates", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			server := f.ServerFromContext(ctx)
+			r := cfg.Client().Resources()
+
+			f.WaitForMCPServerReconciledAndReady(ctx, t, r, server)
+
+			t.Log("issuing a burst of back-to-back spec updates to induce update contention")
+			for i := range 6 {
+				val := fmt.Sprintf("probe-%d", i)
+				f.UpdateWithRetry(ctx, t, r, server, func(s *mcpv1beta1.MCPServer) {
+					s.Spec.Config.Env = []corev1.EnvVar{{Name: "FLICKER_PROBE", Value: val}}
+				})
+				t.Logf("applied spec update %d (FLICKER_PROBE=%s)", i, val)
+			}
+
+			t.Log("verifying the server converges back to Available=True and Verified=True")
+			// WaitForMCPServerReconciledAndReady already blocks until
+			// observedGeneration>=generation, Available=True and Verified=True, so
+			// convergence is asserted by the wait itself (it fails on timeout).
+			f.WaitForMCPServerReconciledAndReady(ctx, t, r, server)
+
+			// The latest env value must be reflected on the Deployment, proving the
+			// updates were actually applied (and not silently dropped on conflict).
+			dep := &appsv1.Deployment{}
+			if err := r.Get(ctx, server.Name, server.Namespace, dep); err != nil {
+				t.Fatalf("Deployment not found: %v", err)
+			}
+			if len(dep.Spec.Template.Spec.Containers) == 0 {
+				t.Fatal("expected at least one container in Deployment pod template")
+			}
+			if !hasEnv(dep.Spec.Template.Spec.Containers[0].Env, "FLICKER_PROBE", "probe-5") {
+				t.Fatalf("expected Deployment to reflect the final env update FLICKER_PROBE=probe-5, got %v",
+					dep.Spec.Template.Spec.Containers[0].Env)
+			}
+
+			t.Log("server converged to Available=True with the latest spec applied after rapid updates")
+			return ctx
+		}).
+		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+			return f.TeardownMCPServer(ctx, t, cfg)
+		}).
+		Feature()
+
+	testenv.Test(t, feature)
+}
+
+// hasEnv reports whether the env slice contains a variable with the given name and value.
+func hasEnv(env []corev1.EnvVar, name, value string) bool {
+	for _, e := range env {
+		if e.Name == name && e.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
 // --- Ownership and Garbage Collection Tests ---
 
 func TestOwnerReferences(t *testing.T) {
 	t.Parallel()
 	feature := features.New("MCPServer OwnerReferences on child resources").
-		WithLabel("type", "reconciliation").
-		WithLabel("scenario", "ownership").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Fast).
+		WithLabel(scenario.Label, scenario.Ownership).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			return f.SetupMCPServer(ctx, t, cfg, "owner-ref", true)
 		}).
@@ -525,8 +667,9 @@ func assertOwnerReference(t *testing.T, refs []metav1.OwnerReference, expectedNa
 func TestCascadingDeletion(t *testing.T) {
 	t.Parallel()
 	feature := features.New("MCPServer cascading deletion").
-		WithLabel("type", "reconciliation").
-		WithLabel("scenario", "cascading-delete").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Moderate).
+		WithLabel(scenario.Label, scenario.Ownership).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			return f.SetupMCPServer(ctx, t, cfg, "cascade-del", true)
 		}).
@@ -575,8 +718,9 @@ func TestCascadingDeletion(t *testing.T) {
 func TestConfigMapDataUpdateTriggersRestart(t *testing.T) {
 	t.Parallel()
 	feature := features.New("MCPServer config hash update on ConfigMap change").
-		WithLabel("type", "reconciliation").
-		WithLabel("scenario", "config-hash").
+		WithLabel(category.Label, category.Lifecycle).
+		WithLabel(speed.Label, speed.Moderate).
+		WithLabel(scenario.Label, scenario.Drift).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			ns := ctx.Value(f.NsKey).(string)
 			r := cfg.Client().Resources()
@@ -654,8 +798,8 @@ func TestConfigMapDataUpdateTriggersRestart(t *testing.T) {
 			newHash := dep.Spec.Template.Annotations[configHashAnnotation]
 			t.Logf("config hash changed from %s to %s", initialHash, newHash)
 
-			f.WaitForMCPServerCondition(ctx, t, r, server, "Ready", metav1.ConditionTrue)
-			t.Log("MCPServer is Ready after config hash update")
+			f.WaitForMCPServerCondition(ctx, t, r, server, "Available", metav1.ConditionTrue)
+			t.Log("MCPServer is Available after config hash update")
 
 			return ctx
 		}).
