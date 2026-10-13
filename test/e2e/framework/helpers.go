@@ -408,24 +408,15 @@ func WaitForEndpointsReady(ctx context.Context, t *testing.T, cfg *envconf.Confi
 }
 
 // CreateGatewayConfigMap creates a ConfigMap with gateway integration settings.
-// It copies all entries from configData except "gateway-class", which is not a
-// ConfigMap key but a provider registration detail.
 func CreateGatewayConfigMap(ctx context.Context, t *testing.T, cfg *envconf.Config,
 	name, namespace string, configData map[string]string) {
 	t.Helper()
-	data := make(map[string]string, len(configData))
-	for k, v := range configData {
-		if k == "gateway-class" {
-			continue
-		}
-		data[k] = v
-	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 		},
-		Data: data,
+		Data: configData,
 	}
 	if err := cfg.Client().Resources().Create(ctx, cm); err != nil {
 		t.Fatalf("failed to create gateway ConfigMap: %v", err)
@@ -473,67 +464,24 @@ func WaitForGatewayAddress(ctx context.Context, t *testing.T, r *resources.Resou
 	}
 }
 
-// EnsureGateway creates a GatewayClass, namespace, and Gateway resource if they don't
-// already exist. The Gateway allows routes from all namespaces so that HTTPRoutes
-// created in per-test namespaces are accepted by the gateway controller.
-// It returns the listener name. Use WaitForGatewayAddress to obtain the LB address.
-func EnsureGateway(ctx context.Context, t *testing.T, cfg *envconf.Config,
-	name, namespace, gatewayClassName string) string {
+// DiscoverGateway reads an existing Gateway and returns its first listener name
+// and gateway class name. The gateway is expected to have been created by
+// lifecycle hooks.
+func DiscoverGateway(ctx context.Context, t *testing.T, cfg *envconf.Config,
+	name, namespace string) (listenerName, gatewayClassName string) {
 	t.Helper()
 	r := cfg.Client().Resources()
-
-	gc := &gatewayv1.GatewayClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: gatewayClassName,
-		},
-		Spec: gatewayv1.GatewayClassSpec{
-			ControllerName: "gateway.envoyproxy.io/gatewayclass-controller",
-		},
-	}
-	if err := r.Create(ctx, gc); err != nil && !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("failed to create GatewayClass %s: %v", gatewayClassName, err)
-	}
-
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
-	if err := r.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("failed to create namespace %s: %v", namespace, err)
-	}
-
-	fromAll := gatewayv1.NamespacesFromAll
-	gw := &gatewayv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-		Spec: gatewayv1.GatewaySpec{
-			GatewayClassName: gatewayv1.ObjectName(gatewayClassName),
-			Listeners: []gatewayv1.Listener{{
-				Name:     defaultListenerName,
-				Protocol: gatewayv1.HTTPProtocolType,
-				Port:     80,
-				AllowedRoutes: &gatewayv1.AllowedRoutes{
-					Namespaces: &gatewayv1.RouteNamespaces{
-						From: &fromAll,
-					},
-				},
-			}},
-		},
-	}
-	if err := r.Create(ctx, gw); err != nil && !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("failed to create Gateway %s/%s: %v", namespace, name, err)
-	}
-
-	existing := &gatewayv1.Gateway{}
-	if err := r.Get(ctx, name, namespace, existing); err != nil {
+	gw := &gatewayv1.Gateway{}
+	if err := r.Get(ctx, name, namespace, gw); err != nil {
 		t.Fatalf("failed to read Gateway %s/%s: %v", namespace, name, err)
 	}
-	listenerName := defaultListenerName
-	if len(existing.Spec.Listeners) > 0 {
-		listenerName = string(existing.Spec.Listeners[0].Name)
+	gatewayClassName = string(gw.Spec.GatewayClassName)
+	listenerName = defaultListenerName
+	if len(gw.Spec.Listeners) > 0 {
+		listenerName = string(gw.Spec.Listeners[0].Name)
 	}
-
-	t.Logf("ensured Gateway %s/%s (class=%s, listener=%s)", namespace, name, gatewayClassName, listenerName)
-	return listenerName
+	t.Logf("discovered Gateway %s/%s (class=%s, listener=%s)", namespace, name, gatewayClassName, listenerName)
+	return listenerName, gatewayClassName
 }
 
 // WaitForBindingRegistered polls until the MCPGatewayBinding's Registered condition
@@ -602,4 +550,100 @@ func UpdateWithRetry[T k8s.Object](ctx context.Context, t *testing.T, r *resourc
 		t.Fatalf("failed to update %s/%s after retries: %v",
 			obj.GetNamespace(), obj.GetName(), err)
 	}
+}
+
+// DumpDiagnostics logs cluster state for debugging when a test fails.
+func DumpDiagnostics(ctx context.Context, t *testing.T, cfg *envconf.Config, ns string) {
+	t.Helper()
+	t.Log("=== DIAGNOSTICS DUMP (test failed) ===")
+	r := cfg.Client().Resources(ns)
+
+	var servers mcpv1alpha1.MCPServerList
+	if err := r.List(ctx, &servers); err == nil {
+		for _, s := range servers.Items {
+			t.Logf("MCPServer %s/%s generation=%d observedGeneration=%d",
+				s.Namespace, s.Name, s.Generation, s.Status.ObservedGeneration)
+			if s.Status.Address != nil {
+				t.Logf("  address: %s", s.Status.Address.URL)
+			}
+			for _, c := range s.Status.Conditions {
+				t.Logf("  condition %s=%s reason=%s message=%q",
+					c.Type, c.Status, c.Reason, c.Message)
+			}
+		}
+	}
+
+	var bindings mcpv1alpha1.MCPGatewayBindingList
+	if err := r.List(ctx, &bindings); err == nil {
+		for _, b := range bindings.Items {
+			t.Logf("MCPGatewayBinding %s/%s provider=%s mcpServerRef=%s",
+				b.Namespace, b.Name, b.Spec.Provider, b.Spec.MCPServerRef)
+			for _, c := range b.Status.Conditions {
+				t.Logf("  condition %s=%s reason=%s message=%q",
+					c.Type, c.Status, c.Reason, c.Message)
+			}
+		}
+	}
+
+	var httpRoutes gatewayv1.HTTPRouteList
+	if err := r.List(ctx, &httpRoutes); err == nil {
+		for _, hr := range httpRoutes.Items {
+			t.Logf("HTTPRoute %s/%s parentRefs=%d rules=%d",
+				hr.Namespace, hr.Name, len(hr.Spec.ParentRefs), len(hr.Spec.Rules))
+		}
+	}
+
+	var deployments appsv1.DeploymentList
+	if err := r.List(ctx, &deployments); err == nil {
+		for _, d := range deployments.Items {
+			desired := int32(1)
+			if d.Spec.Replicas != nil {
+				desired = *d.Spec.Replicas
+			}
+			t.Logf("Deployment %s replicas=%d/%d available=%d",
+				d.Name, d.Status.ReadyReplicas, desired, d.Status.AvailableReplicas)
+		}
+	}
+
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods); err == nil {
+		for _, p := range pods.Items {
+			t.Logf("Pod %s phase=%s", p.Name, p.Status.Phase)
+			for _, cs := range p.Status.ContainerStatuses {
+				t.Logf("  container %s ready=%v restarts=%d", cs.Name, cs.Ready, cs.RestartCount)
+				if cs.State.Waiting != nil {
+					t.Logf("    waiting: %s - %s", cs.State.Waiting.Reason, cs.State.Waiting.Message)
+				}
+			}
+		}
+	}
+
+	var events corev1.EventList
+	if err := r.List(ctx, &events); err == nil {
+		for _, e := range events.Items {
+			t.Logf("Event %s %s/%s: %s - %s",
+				e.Type, e.InvolvedObject.Kind, e.InvolvedObject.Name,
+				e.Reason, e.Message)
+		}
+	}
+
+	t.Log("--- controller-manager logs ---")
+	opRef := MustDiscoverOperatorOnce(ctx, cfg, t)
+	controllerNs := opRef.Namespace
+	rCtrl := cfg.Client().Resources(controllerNs)
+	var ctrlPods corev1.PodList
+	if err := rCtrl.List(ctx, &ctrlPods); err == nil {
+		for _, p := range ctrlPods.Items {
+			if p.Status.Phase == corev1.PodRunning {
+				logs := PodLogs(ctx, t, cfg, p.Name, controllerNs)
+				lines := strings.Split(logs, "\n")
+				if len(lines) > 50 {
+					lines = lines[len(lines)-50:]
+				}
+				t.Logf("Pod %s (last %d lines):\n%s", p.Name, len(lines), strings.Join(lines, "\n"))
+			}
+		}
+	}
+
+	t.Log("=== END DIAGNOSTICS ===")
 }
