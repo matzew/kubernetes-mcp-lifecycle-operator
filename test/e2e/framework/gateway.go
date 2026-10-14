@@ -1,5 +1,3 @@
-//go:build e2e && e2e_gateway
-
 /*
 Copyright 2026 The Kubernetes Authors
 
@@ -22,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
@@ -36,70 +33,6 @@ import (
 
 	kuadrantapi "github.com/kubernetes-sigs/mcp-lifecycle-operator/internal/controller/providers/kuadrant/api"
 )
-
-// ProviderConfig describes a gateway provider for conformance testing.
-type ProviderConfig struct {
-	Name       string
-	ConfigData map[string]string
-}
-
-// CopyConfigData returns a shallow copy of the provider's ConfigData map,
-// safe to mutate without affecting the global registry.
-func (p ProviderConfig) CopyConfigData() map[string]string {
-	cp := make(map[string]string, len(p.ConfigData))
-	for k, v := range p.ConfigData {
-		cp[k] = v
-	}
-	return cp
-}
-
-var providers = map[string]ProviderConfig{
-	"httproute": {
-		Name: "httproute",
-		ConfigData: map[string]string{
-			"gateway-name":      "e2e-gateway",
-			"gateway-namespace": "gateway-system",
-			"gateway-class":     "eg",
-			"route-hostname":    "mcp.e2e.test",
-			"public-hostname":   "mcp.e2e.test",
-		},
-	},
-	"kuadrant": {
-		Name: "kuadrant",
-		ConfigData: map[string]string{
-			"gateway-name":        "mcp-gateway",
-			"gateway-namespace":   "gateway-system",
-			"gateway-class":       "istio",
-			"route-hostname":      "mcp.e2e.test",
-			"extension-name":      "mcp-gateway-extension",
-			"extension-namespace": "mcp-system",
-			"prefix":              "e2e_",
-		},
-	},
-}
-
-// ActiveProvider returns the ProviderConfig selected by the GATEWAY_PROVIDER
-// environment variable. It fatals if the variable is unset or unknown.
-func ActiveProvider(t *testing.T) ProviderConfig {
-	t.Helper()
-	name := os.Getenv("GATEWAY_PROVIDER")
-	if name == "" {
-		t.Fatal("GATEWAY_PROVIDER environment variable is not set")
-	}
-	prov, ok := providers[name]
-	if !ok {
-		t.Fatalf("unknown gateway provider %q, available: %v", name, providerNames())
-	}
-	return prov
-}
-
-func providerNames() []string {
-	names := make([]string, 0, len(providers))
-	for n := range providers {
-		names = append(names, n)
-	}
-	return names
-}
 
 type hostOverrideTransport struct {
 	base http.RoundTripper
@@ -159,7 +92,7 @@ func CreateMCPGatewayExtension(ctx context.Context, t *testing.T, cfg *envconf.C
 		},
 		Spec: kuadrantapi.MCPGatewayExtensionSpec{
 			TargetRef: kuadrantapi.TargetReference{
-				Group:     "gateway.networking.k8s.io",
+				Group:     gatewayv1.GroupName,
 				Kind:      "Gateway",
 				Name:      gatewayName,
 				Namespace: gatewayNamespace,
@@ -217,42 +150,6 @@ func WaitForExtensionReady(ctx context.Context, t *testing.T, cfg *envconf.Confi
 	}
 }
 
-// BuildControllerConfigData builds the ConfigMap data that the controller reads
-// based on the provider type. Kuadrant uses extension-based keys while httproute
-// uses gateway-name/gateway-namespace.
-func BuildControllerConfigData(prov ProviderConfig, sectionName string) map[string]string {
-	switch prov.Name {
-	case "kuadrant":
-		data := map[string]string{
-			"extension-name":      prov.ConfigData["extension-name"],
-			"extension-namespace": prov.ConfigData["extension-namespace"],
-			"prefix":              prov.ConfigData["prefix"],
-		}
-		if sectionName != "" {
-			data["section-name"] = sectionName
-		}
-		if rh, ok := prov.ConfigData["route-hostname"]; ok {
-			data["route-hostname"] = rh
-		}
-		return data
-	default:
-		data := map[string]string{
-			"gateway-name":      prov.ConfigData["gateway-name"],
-			"gateway-namespace": prov.ConfigData["gateway-namespace"],
-		}
-		if sectionName != "" {
-			data["section-name"] = sectionName
-		}
-		if rh, ok := prov.ConfigData["route-hostname"]; ok {
-			data["route-hostname"] = rh
-		}
-		if ph, ok := prov.ConfigData["public-hostname"]; ok {
-			data["public-hostname"] = ph
-		}
-		return data
-	}
-}
-
 // ListenerSpec describes a Gateway listener for EnsureMultiListenerGateway.
 type ListenerSpec struct {
 	Name     string
@@ -269,12 +166,12 @@ func EnsureMultiListenerGateway(ctx context.Context, t *testing.T, cfg *envconf.
 	r := cfg.Client().Resources()
 
 	fromAll := gatewayv1.NamespacesFromAll
-	var gwListeners []gatewayv1.Listener
+	gwListeners := make([]gatewayv1.Listener, 0, len(listeners))
 	for _, l := range listeners {
 		listener := gatewayv1.Listener{
 			Name:     gatewayv1.SectionName(l.Name),
 			Protocol: l.Protocol,
-			Port:     gatewayv1.PortNumber(l.Port),
+			Port:     l.Port,
 			AllowedRoutes: &gatewayv1.AllowedRoutes{
 				Namespaces: &gatewayv1.RouteNamespaces{
 					From: &fromAll,
@@ -346,7 +243,7 @@ func AssertMCPReachable(ctx context.Context, t *testing.T, gatewayAddress, route
 		t.Fatalf("MCP handshake through gateway failed (address=%s, host=%s, path=%s): %v",
 			gatewayAddress, routeHostname, path, err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	initResult := session.InitializeResult()
 	if initResult == nil {
@@ -374,7 +271,7 @@ func EnsureReferenceGrant(ctx context.Context, t *testing.T, cfg *envconf.Config
 		Spec: gatewayv1.ReferenceGrantSpec{
 			From: []gatewayv1.ReferenceGrantFrom{
 				{
-					Group:     "gateway.networking.k8s.io",
+					Group:     gatewayv1.GroupName,
 					Kind:      "HTTPRoute",
 					Namespace: gatewayv1.Namespace(fromNamespace),
 				},
@@ -404,12 +301,4 @@ func EnsureReferenceGrant(ctx context.Context, t *testing.T, cfg *envconf.Config
 	t.Cleanup(func() {
 		_ = r.Delete(context.Background(), grant)
 	})
-}
-
-func init() {
-	for name, p := range providers {
-		if p.Name != name {
-			panic(fmt.Sprintf("provider config key %q does not match Name %q", name, p.Name))
-		}
-	}
 }

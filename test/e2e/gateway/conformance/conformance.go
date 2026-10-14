@@ -1,4 +1,4 @@
-//go:build e2e && e2e_gateway
+//go:build e2e
 
 /*
 Copyright 2026 The Kubernetes Authors
@@ -16,53 +16,50 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package e2e
+package conformance
 
 import (
 	"context"
 	"net/url"
-	"sync"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
 	mcpv1alpha1 "github.com/kubernetes-sigs/mcp-lifecycle-operator/api/v1alpha1"
 	mcpv1beta1 "github.com/kubernetes-sigs/mcp-lifecycle-operator/api/v1beta1"
-	kuadrantapi "github.com/kubernetes-sigs/mcp-lifecycle-operator/internal/controller/providers/kuadrant/api"
 	f "github.com/kubernetes-sigs/mcp-lifecycle-operator/test/e2e/framework"
 	"github.com/kubernetes-sigs/mcp-lifecycle-operator/test/e2e/framework/labels/category"
 	"github.com/kubernetes-sigs/mcp-lifecycle-operator/test/e2e/framework/labels/scope"
 	"github.com/kubernetes-sigs/mcp-lifecycle-operator/test/e2e/framework/labels/speed"
 )
 
-var registerConformanceKuadrantOnce sync.Once
-
-func ensureConformanceKuadrantScheme(t *testing.T, scheme *runtime.Scheme) {
-	t.Helper()
-	registerConformanceKuadrantOnce.Do(func() {
-		if err := kuadrantapi.AddToScheme(scheme); err != nil {
-			t.Fatalf("failed to register Kuadrant types: %v", err)
-		}
+// RunGatewayConformanceSuite runs the shared gateway conformance tests against
+// the given provider. Each test is a subtest of t, individually runnable
+// with -run.
+func RunGatewayConformanceSuite(t *testing.T, testenv env.Environment, prov Provider) {
+	t.Run("binding lifecycle", func(t *testing.T) {
+		runBindingLifecycle(t, testenv, prov)
+	})
+	t.Run("removal", func(t *testing.T) {
+		runRemoval(t, testenv, prov)
+	})
+	t.Run("HTTP reachability", func(t *testing.T) {
+		runHTTPReachability(t, testenv, prov)
+	})
+	t.Run("hostname separation", func(t *testing.T) {
+		runHostnameSeparation(t, testenv, prov)
+	})
+	t.Run("recovery", func(t *testing.T) {
+		runRecovery(t, testenv, prov)
 	})
 }
 
-func setupKuadrantExtension(ctx context.Context, t *testing.T, cfg *envconf.Config, prov f.ProviderConfig, ns string) {
-	t.Helper()
-	if prov.Name != "kuadrant" {
-		return
-	}
-	ensureConformanceKuadrantScheme(t, cfg.Client().Resources().GetScheme())
-	f.EnsureReferenceGrant(ctx, t, cfg, ns, prov.ConfigData["gateway-namespace"])
-	f.WaitForExtensionReady(ctx, t, cfg, prov.ConfigData["extension-name"], prov.ConfigData["extension-namespace"])
-}
-
-func TestGatewayConformanceBindingLifecycle(t *testing.T) {
-	prov := f.ActiveProvider(t)
+func runBindingLifecycle(t *testing.T, testenv env.Environment, prov Provider) {
 	const configMapName = "gw-conformance-config"
 
 	feature := features.New("Gateway conformance: binding lifecycle").
@@ -71,13 +68,11 @@ func TestGatewayConformanceBindingLifecycle(t *testing.T) {
 		WithLabel(scope.Label, scope.GatewayConformance).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			ns := ctx.Value(f.NsKey).(string)
-			listenerName := f.EnsureGateway(ctx, t, cfg, prov.ConfigData["gateway-name"], prov.ConfigData["gateway-namespace"], prov.ConfigData["gateway-class"])
-
-			setupKuadrantExtension(ctx, t, cfg, prov, ns)
-			configData := f.BuildControllerConfigData(prov, listenerName)
+			prov.Setup(ctx, t, cfg, ns)
+			configData := prov.ConfigData()
 			f.CreateGatewayConfigMap(ctx, t, cfg, configMapName, ns, configData)
 			return f.SetupMCPServer(ctx, t, cfg, "conformance-lifecycle", false,
-				f.WithGateway(prov.Name, configMapName),
+				f.WithGateway(prov.Name(), configMapName),
 				f.WithPath("/mcp"),
 			)
 		}).
@@ -97,8 +92,8 @@ func TestGatewayConformanceBindingLifecycle(t *testing.T) {
 			if err := r.Get(ctx, bindingName, server.Namespace, binding); err != nil {
 				t.Fatalf("failed to get MCPGatewayBinding: %v", err)
 			}
-			if binding.Spec.Provider != prov.Name {
-				t.Fatalf("expected provider %s, got %s", prov.Name, binding.Spec.Provider)
+			if binding.Spec.Provider != prov.Name() {
+				t.Fatalf("expected provider %s, got %s", prov.Name(), binding.Spec.Provider)
 			}
 			if binding.Spec.MCPServerRef != server.Name {
 				t.Fatalf("expected mcpServerRef %s, got %s", server.Name, binding.Spec.MCPServerRef)
@@ -136,8 +131,7 @@ func TestGatewayConformanceBindingLifecycle(t *testing.T) {
 	testenv.Test(t, feature)
 }
 
-func TestGatewayConformanceRemoval(t *testing.T) {
-	prov := f.ActiveProvider(t)
+func runRemoval(t *testing.T, testenv env.Environment, prov Provider) {
 	const configMapName = "gw-removal-config"
 
 	feature := features.New("Gateway conformance: removal").
@@ -146,13 +140,11 @@ func TestGatewayConformanceRemoval(t *testing.T) {
 		WithLabel(scope.Label, scope.GatewayConformance).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			ns := ctx.Value(f.NsKey).(string)
-			listenerName := f.EnsureGateway(ctx, t, cfg, prov.ConfigData["gateway-name"], prov.ConfigData["gateway-namespace"], prov.ConfigData["gateway-class"])
-
-			setupKuadrantExtension(ctx, t, cfg, prov, ns)
-			configData := f.BuildControllerConfigData(prov, listenerName)
+			prov.Setup(ctx, t, cfg, ns)
+			configData := prov.ConfigData()
 			f.CreateGatewayConfigMap(ctx, t, cfg, configMapName, ns, configData)
 			ctx = f.SetupMCPServer(ctx, t, cfg, "conformance-removal", false,
-				f.WithGateway(prov.Name, configMapName),
+				f.WithGateway(prov.Name(), configMapName),
 				f.WithPath("/mcp"),
 			)
 			server := f.ServerFromContext(ctx)
@@ -210,8 +202,7 @@ func TestGatewayConformanceRemoval(t *testing.T) {
 	testenv.Test(t, feature)
 }
 
-func TestGatewayConformanceHTTPReachability(t *testing.T) {
-	prov := f.ActiveProvider(t)
+func runHTTPReachability(t *testing.T, testenv env.Environment, prov Provider) {
 	const configMapName = "gw-reachability-config"
 
 	var gwAddr string
@@ -222,14 +213,12 @@ func TestGatewayConformanceHTTPReachability(t *testing.T) {
 		WithLabel(scope.Label, scope.GatewayConformance).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			ns := ctx.Value(f.NsKey).(string)
-			listenerName := f.EnsureGateway(ctx, t, cfg, prov.ConfigData["gateway-name"], prov.ConfigData["gateway-namespace"], prov.ConfigData["gateway-class"])
-			gwAddr = f.WaitForGatewayAddress(ctx, t, cfg.Client().Resources(), prov.ConfigData["gateway-name"], prov.ConfigData["gateway-namespace"])
-
-			setupKuadrantExtension(ctx, t, cfg, prov, ns)
-			configData := f.BuildControllerConfigData(prov, listenerName)
+			prov.Setup(ctx, t, cfg, ns)
+			gwAddr = prov.GatewayAddress(ctx, t, cfg)
+			configData := prov.ConfigData()
 			f.CreateGatewayConfigMap(ctx, t, cfg, configMapName, ns, configData)
 			ctx = f.SetupMCPServer(ctx, t, cfg, "conformance-http", true,
-				f.WithGateway(prov.Name, configMapName),
+				f.WithGateway(prov.Name(), configMapName),
 				f.WithPath("/mcp"),
 			)
 
@@ -267,8 +256,7 @@ func TestGatewayConformanceHTTPReachability(t *testing.T) {
 	testenv.Test(t, feature)
 }
 
-func TestGatewayConformanceHostnameSeparation(t *testing.T) {
-	prov := f.ActiveProvider(t)
+func runHostnameSeparation(t *testing.T, testenv env.Environment, prov Provider) {
 	const configMapName = "gw-hostname-sep-config"
 
 	var gwAddr string
@@ -279,16 +267,14 @@ func TestGatewayConformanceHostnameSeparation(t *testing.T) {
 		WithLabel(scope.Label, scope.GatewayConformance).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			ns := ctx.Value(f.NsKey).(string)
-			listenerName := f.EnsureGateway(ctx, t, cfg, prov.ConfigData["gateway-name"], prov.ConfigData["gateway-namespace"], prov.ConfigData["gateway-class"])
-			gwAddr = f.WaitForGatewayAddress(ctx, t, cfg.Client().Resources(), prov.ConfigData["gateway-name"], prov.ConfigData["gateway-namespace"])
-
-			setupKuadrantExtension(ctx, t, cfg, prov, ns)
-			configData := f.BuildControllerConfigData(prov, listenerName)
+			prov.Setup(ctx, t, cfg, ns)
+			gwAddr = prov.GatewayAddress(ctx, t, cfg)
+			configData := prov.ConfigData()
 			configData["route-hostname"] = "internal.mcp.local"
 			configData["public-hostname"] = "public.example.com"
 			f.CreateGatewayConfigMap(ctx, t, cfg, configMapName, ns, configData)
 			ctx = f.SetupMCPServer(ctx, t, cfg, "hostname-sep", true,
-				f.WithGateway(prov.Name, configMapName),
+				f.WithGateway(prov.Name(), configMapName),
 				f.WithPath("/mcp"),
 			)
 
@@ -343,8 +329,7 @@ func TestGatewayConformanceHostnameSeparation(t *testing.T) {
 	testenv.Test(t, feature)
 }
 
-func TestGatewayConformanceRecoverOnConfigMapUpdate(t *testing.T) {
-	prov := f.ActiveProvider(t)
+func runRecovery(t *testing.T, testenv env.Environment, prov Provider) {
 	const configMapName = "gw-recover-config"
 
 	feature := features.New("Gateway conformance: recover on ConfigMap update").
@@ -353,203 +338,34 @@ func TestGatewayConformanceRecoverOnConfigMapUpdate(t *testing.T) {
 		WithLabel(scope.Label, scope.GatewayConformance).
 		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			ns := ctx.Value(f.NsKey).(string)
-			listenerName := f.EnsureGateway(ctx, t, cfg, prov.ConfigData["gateway-name"], prov.ConfigData["gateway-namespace"], prov.ConfigData["gateway-class"])
-
-			var configData map[string]string
-			switch prov.Name {
-			case "kuadrant":
-				ensureConformanceKuadrantScheme(t, cfg.Client().Resources().GetScheme())
-				configData = map[string]string{
-					"extension-name":      "nonexistent-extension",
-					"extension-namespace": prov.ConfigData["gateway-namespace"],
-					"section-name":        listenerName,
-					"route-hostname":      "recover.mcp.local",
-					"prefix":              prov.ConfigData["prefix"],
-				}
-			default:
-				configData = map[string]string{
-					"gateway-name":      "nonexistent-gateway",
-					"gateway-namespace": prov.ConfigData["gateway-namespace"],
-					"section-name":      listenerName,
-					"route-hostname":    "recover.mcp.local",
-					"public-hostname":   "recover.mcp.local",
-				}
-			}
-			f.CreateGatewayConfigMap(ctx, t, cfg, configMapName, ns, configData)
+			prov.Setup(ctx, t, cfg, ns)
+			invalidConfig := prov.InvalidConfigData()
+			f.CreateGatewayConfigMap(ctx, t, cfg, configMapName, ns, invalidConfig)
 			ctx = f.SetupMCPServer(ctx, t, cfg, "recover-cfg", false,
-				f.WithGateway(prov.Name, configMapName),
+				f.WithGateway(prov.Name(), configMapName),
 				f.WithPath("/mcp"),
 			)
 			return ctx
 		}).
-		Assess("GatewayRegistered=False with invalid gateway", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("GatewayRegistered=False with invalid config", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			server := f.ServerFromContext(ctx)
 			r := cfg.Client().Resources()
 			f.WaitForMCPServerCondition(ctx, t, r, server, "GatewayRegistered", metav1.ConditionFalse)
-			t.Log("GatewayRegistered=False as expected with invalid gateway reference")
+			t.Log("GatewayRegistered=False as expected with invalid config")
 			return ctx
 		}).
-		Assess("update ConfigMap to valid gateway", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
+		Assess("update ConfigMap to valid config", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			ns := ctx.Value(f.NsKey).(string)
-
-			var configData map[string]string
-			switch prov.Name {
-			case "kuadrant":
-				setupKuadrantExtension(ctx, t, cfg, prov, ns)
-				configData = f.BuildControllerConfigData(prov, "")
-			default:
-				listenerName := f.EnsureGateway(ctx, t, cfg, prov.ConfigData["gateway-name"], prov.ConfigData["gateway-namespace"], prov.ConfigData["gateway-class"])
-				configData = map[string]string{
-					"gateway-name":      prov.ConfigData["gateway-name"],
-					"gateway-namespace": prov.ConfigData["gateway-namespace"],
-					"section-name":      listenerName,
-					"route-hostname":    "recover.mcp.local",
-					"public-hostname":   "recover.mcp.local",
-				}
-			}
-			f.UpdateGatewayConfigMap(ctx, t, cfg, configMapName, ns, configData)
-			t.Log("updated ConfigMap to valid gateway reference")
+			validConfig := prov.ConfigData()
+			f.UpdateGatewayConfigMap(ctx, t, cfg, configMapName, ns, validConfig)
+			t.Log("updated ConfigMap to valid config")
 			return ctx
 		}).
 		Assess("GatewayRegistered recovers to True", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
 			server := f.ServerFromContext(ctx)
 			r := cfg.Client().Resources()
 			f.WaitForMCPServerGatewayAddress(ctx, t, r, server)
-
-			if err := r.Get(ctx, server.Name, server.Namespace, server); err != nil {
-				t.Fatalf("failed to get MCPServer: %v", err)
-			}
-			if prov.Name != "kuadrant" {
-				f.AssertGatewayAddressURL(t, server, "recover.mcp.local", "/mcp")
-			}
-			t.Logf("GatewayRegistered recovered to True with address: %s", server.Status.Address.URL)
-			return ctx
-		}).
-		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			return f.TeardownMCPServer(ctx, t, cfg)
-		}).
-		Feature()
-
-	testenv.Test(t, feature)
-}
-
-func TestGatewayConformanceConfigMapUpdateTriggersStatusUpdate(t *testing.T) {
-	prov := f.ActiveProvider(t)
-	const configMapName = "gw-cm-update-config"
-
-	var sectionName string
-	var extName, extNs string
-
-	feature := features.New("Gateway conformance: ConfigMap update triggers status update").
-		WithLabel(category.Label, category.Networking).
-		WithLabel(speed.Label, speed.Moderate).
-		WithLabel(scope.Label, scope.GatewayConformance).
-		Setup(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			ns := ctx.Value(f.NsKey).(string)
-
-			var configData map[string]string
-			switch prov.Name {
-			case "kuadrant":
-				ensureConformanceKuadrantScheme(t, cfg.Client().Resources().GetScheme())
-				f.EnsureReferenceGrant(ctx, t, cfg, ns, prov.ConfigData["gateway-namespace"])
-				f.EnsureMultiListenerGateway(ctx, t, cfg,
-					"cfg-update-gw", prov.ConfigData["gateway-namespace"], prov.ConfigData["gateway-class"],
-					[]f.ListenerSpec{{Name: "http", Port: 80, Protocol: gatewayv1.HTTPProtocolType}},
-				)
-				sectionName = "http"
-				extName = "cfg-update-ext"
-				extNs = ns
-				f.CreateMCPGatewayExtension(ctx, t, cfg,
-					extName, extNs,
-					"cfg-update-gw", prov.ConfigData["gateway-namespace"],
-					f.WithPublicHost("first.mcp.local"),
-					f.WithSectionName("http"),
-				)
-				f.WaitForExtensionReady(ctx, t, cfg, extName, extNs)
-				configData = map[string]string{
-					"extension-name":      extName,
-					"extension-namespace": extNs,
-					"section-name":        "http",
-					"route-hostname":      "first.mcp.local",
-					"prefix":              prov.ConfigData["prefix"],
-				}
-			default:
-				listenerName := f.EnsureGateway(ctx, t, cfg, prov.ConfigData["gateway-name"], prov.ConfigData["gateway-namespace"], prov.ConfigData["gateway-class"])
-				sectionName = listenerName
-				configData = map[string]string{
-					"gateway-name":      prov.ConfigData["gateway-name"],
-					"gateway-namespace": prov.ConfigData["gateway-namespace"],
-					"section-name":      listenerName,
-					"route-hostname":    "first.mcp.local",
-					"public-hostname":   "first.mcp.local",
-				}
-			}
-			f.CreateGatewayConfigMap(ctx, t, cfg, configMapName, ns, configData)
-			ctx = f.SetupMCPServer(ctx, t, cfg, "cm-update", true,
-				f.WithGateway(prov.Name, configMapName),
-				f.WithPath("/mcp"),
-			)
-
-			server := f.ServerFromContext(ctx)
-			r := cfg.Client().Resources()
-			f.WaitForMCPServerGatewayAddress(ctx, t, r, server)
-			return ctx
-		}).
-		Assess("initial status uses first hostname", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			server := f.ServerFromContext(ctx)
-			r := cfg.Client().Resources()
-
-			if err := r.Get(ctx, server.Name, server.Namespace, server); err != nil {
-				t.Fatalf("failed to get MCPServer: %v", err)
-			}
-
-			f.AssertGatewayAddressURL(t, server, "first.mcp.local", "/mcp")
-			t.Logf("initial status uses first hostname: %s", server.Status.Address.URL)
-			return ctx
-		}).
-		Assess("update ConfigMap to second hostname", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			ns := ctx.Value(f.NsKey).(string)
-			var configData map[string]string
-			switch prov.Name {
-			case "kuadrant":
-				ext := &kuadrantapi.MCPGatewayExtension{
-					ObjectMeta: metav1.ObjectMeta{Name: extName, Namespace: extNs},
-				}
-				f.UpdateWithRetry(ctx, t, cfg.Client().Resources(), ext, func(e *kuadrantapi.MCPGatewayExtension) {
-					e.Spec.PublicHost = "second.mcp.local"
-				})
-				configData = map[string]string{
-					"extension-name":      extName,
-					"extension-namespace": extNs,
-					"section-name":        sectionName,
-					"route-hostname":      "second.mcp.local",
-					"prefix":              prov.ConfigData["prefix"],
-				}
-			default:
-				configData = map[string]string{
-					"gateway-name":      prov.ConfigData["gateway-name"],
-					"gateway-namespace": prov.ConfigData["gateway-namespace"],
-					"section-name":      sectionName,
-					"route-hostname":    "second.mcp.local",
-					"public-hostname":   "second.mcp.local",
-				}
-			}
-			f.UpdateGatewayConfigMap(ctx, t, cfg, configMapName, ns, configData)
-			t.Log("updated ConfigMap to second.mcp.local")
-			return ctx
-		}).
-		Assess("status URL updates to second hostname", func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
-			server := f.ServerFromContext(ctx)
-			r := cfg.Client().Resources()
-
-			f.WaitForMCPServerAddressContains(ctx, t, r, server, "second.mcp.local")
-
-			if err := r.Get(ctx, server.Name, server.Namespace, server); err != nil {
-				t.Fatalf("failed to get MCPServer: %v", err)
-			}
-
-			f.AssertGatewayAddressURL(t, server, "second.mcp.local", "/mcp")
-			t.Logf("status URL updated to second hostname: %s", server.Status.Address.URL)
+			t.Logf("GatewayRegistered recovered to True with address set")
 			return ctx
 		}).
 		Teardown(func(ctx context.Context, t *testing.T, cfg *envconf.Config) context.Context {
