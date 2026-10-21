@@ -212,6 +212,9 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: replicas
       type:
         scalar: numeric
+    - name: resolvedImage
+      type:
+        scalar: string
     - name: serverInfo
       type:
         namedType: com.github.kubernetes-sigs.mcp-lifecycle-operator.api.v1beta1.MCPServerInfo

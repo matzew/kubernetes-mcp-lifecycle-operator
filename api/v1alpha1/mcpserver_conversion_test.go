@@ -214,6 +214,7 @@ func TestConversionRoundTrip_FullyPopulated(t *testing.T) {
 			ServiceName:        "full-server",
 			Replicas:           3,
 			ReadyReplicas:      2,
+			ResolvedImage:      "quay.io/example/full-server@sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 			Address: &MCPServerAddress{
 				URL: "http://full-server.production.svc.cluster.local:9090/api/v1/mcp",
 			},

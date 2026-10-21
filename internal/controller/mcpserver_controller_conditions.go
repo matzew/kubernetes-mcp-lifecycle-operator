@@ -124,6 +124,72 @@ func (r *MCPServerReconciler) getPodFailureMessage(
 	return analyzePodFailures(podList.Items)
 }
 
+// resolveRunningImage returns the resolved container image actually running for
+// the MCPServer's managed Deployment. It reads the imageID of the managed
+// container from a running, ready Pod; imageID carries the resolved digest even
+// when the spec references a mutable tag. When no running/ready Pod reports an
+// imageID yet, it falls back to the container image configured on the Deployment
+// so the status is populated from the first reconcile.
+func (r *MCPServerReconciler) resolveRunningImage(
+	ctx context.Context,
+	deployment *appsv1.Deployment,
+) string {
+	fallback := managedContainerImage(deployment)
+
+	if deployment.Spec.Selector == nil {
+		return fallback
+	}
+
+	selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "Failed to parse deployment selector for resolved image")
+		return fallback
+	}
+
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList,
+		client.InNamespace(deployment.Namespace),
+		client.MatchingLabelsSelector{Selector: selector},
+	); err != nil {
+		log.FromContext(ctx).Error(err, "Failed to list pods for resolved image")
+		return fallback
+	}
+
+	if imageID := runningManagedImageID(podList.Items); imageID != "" {
+		return imageID
+	}
+	return fallback
+}
+
+// managedContainerImage returns the image of the managed container from the
+// Deployment's pod template, or "" when it is not present.
+func managedContainerImage(deployment *appsv1.Deployment) string {
+	for _, c := range deployment.Spec.Template.Spec.Containers {
+		if c.Name == ManagedWorkloadName {
+			return c.Image
+		}
+	}
+	return ""
+}
+
+// runningManagedImageID returns the imageID of the managed container from the
+// first ready, running Pod that reports one. imageID carries the resolved digest
+// of the image the kubelet actually pulled and started. Only ContainerStatuses
+// are consulted because the Pod cache is trimmed to that field (see cache.go).
+func runningManagedImageID(pods []corev1.Pod) string {
+	for i := range pods {
+		for _, cs := range pods[i].Status.ContainerStatuses {
+			if cs.Name != ManagedWorkloadName {
+				continue
+			}
+			if cs.Ready && cs.State.Running != nil && cs.ImageID != "" {
+				return cs.ImageID
+			}
+		}
+	}
+	return ""
+}
+
 // deploymentState summarises the health signals from a Deployment's status conditions.
 type deploymentState struct {
 	available      bool

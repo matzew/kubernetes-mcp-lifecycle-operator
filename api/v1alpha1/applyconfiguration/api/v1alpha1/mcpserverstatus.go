@@ -49,6 +49,14 @@ type MCPServerStatusApplyConfiguration struct {
 	Replicas *int32 `json:"replicas,omitempty"`
 	// ReadyReplicas is the number of pods targeted by the owned Deployment with a Ready condition.
 	ReadyReplicas *int32 `json:"readyReplicas,omitempty"`
+	// ResolvedImage is the resolved container image actually running (digest form
+	// when available), as reported by the running Pod. It is read from the
+	// imageID of the managed container in a running Pod, which carries the
+	// resolved digest even when the spec references a mutable tag. When no
+	// running Pod is available yet, it falls back to the container image
+	// configured on the owned Deployment. This lets fleet management see what
+	// binary is really deployed, not just the desired spec tag.
+	ResolvedImage *string `json:"resolvedImage,omitempty"`
 	// Conditions represent the latest available observations of the MCPServer's state.
 	//
 	// Standard condition types (the stable part of the contract):
@@ -132,6 +140,14 @@ func (b *MCPServerStatusApplyConfiguration) WithReplicas(value int32) *MCPServer
 // If called multiple times, the ReadyReplicas field is set to the value of the last call.
 func (b *MCPServerStatusApplyConfiguration) WithReadyReplicas(value int32) *MCPServerStatusApplyConfiguration {
 	b.ReadyReplicas = &value
+	return b
+}
+
+// WithResolvedImage sets the ResolvedImage field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ResolvedImage field is set to the value of the last call.
+func (b *MCPServerStatusApplyConfiguration) WithResolvedImage(value string) *MCPServerStatusApplyConfiguration {
+	b.ResolvedImage = &value
 	return b
 }
 

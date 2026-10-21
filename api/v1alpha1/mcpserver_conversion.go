@@ -55,6 +55,7 @@ func (src *MCPServer) ConvertTo(dstRaw conversion.Hub) error {
 	// going forward, so the deprecated v1alpha1 value is not propagated.
 	dst.Status.Replicas = src.Status.Replicas
 	dst.Status.ReadyReplicas = src.Status.ReadyReplicas
+	dst.Status.ResolvedImage = src.Status.ResolvedImage
 	dst.Status.Conditions = convertConditionsTo(src.Status.Conditions)
 
 	return nil
@@ -89,6 +90,7 @@ func (dst *MCPServer) ConvertFrom(srcRaw conversion.Hub) error {
 	// not by conversion from the hub.
 	dst.Status.Replicas = src.Status.Replicas
 	dst.Status.ReadyReplicas = src.Status.ReadyReplicas
+	dst.Status.ResolvedImage = src.Status.ResolvedImage
 	dst.Status.Conditions = convertConditionsFrom(src.Status.Conditions)
 
 	return nil

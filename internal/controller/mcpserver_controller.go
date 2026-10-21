@@ -526,6 +526,13 @@ func (r *MCPServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		WithReplicas(ptr.Deref(existingDeployment.Spec.Replicas, 1)).
 		WithReadyReplicas(existingDeployment.Status.ReadyReplicas)
 
+	// Record the image actually running (resolved digest from a running Pod when
+	// available, otherwise the Deployment's configured image) so fleet management
+	// can see what binary is really deployed, not just the desired spec tag.
+	if resolvedImage := r.resolveRunningImage(ctx, existingDeployment); resolvedImage != "" {
+		status = status.WithResolvedImage(resolvedImage)
+	}
+
 	applyGatewayStatusToAC(status, gwStatus, acceptedCondition, availableCondition, verifiedCondition)
 
 	// Surface the NetworkPolicy posture (computed right after the NetworkPolicy was

@@ -325,6 +325,90 @@ var _ = Describe("analyzePodFailures", func() {
 	})
 })
 
+var _ = Describe("runningManagedImageID", func() {
+	const digest = "docker.io/library/test-image@sha256:aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999"
+
+	It("returns the imageID of a ready, running managed container", func() {
+		pods := []corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Name: "p1"},
+			Status: corev1.PodStatus{
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:    ManagedWorkloadName,
+					Ready:   true,
+					State:   corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+					ImageID: digest,
+				}},
+			},
+		}}
+		Expect(runningManagedImageID(pods)).To(Equal(digest))
+	})
+
+	It("ignores containers that are not the managed workload", func() {
+		pods := []corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Name: "p1"},
+			Status: corev1.PodStatus{
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:    "sidecar",
+					Ready:   true,
+					State:   corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+					ImageID: "docker.io/other@sha256:dead",
+				}},
+			},
+		}}
+		Expect(runningManagedImageID(pods)).To(BeEmpty())
+	})
+
+	It("skips managed containers that are not ready or not running", func() {
+		pods := []corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Name: "p1"},
+			Status: corev1.PodStatus{
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:    ManagedWorkloadName,
+					Ready:   false,
+					State:   corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+					ImageID: "",
+				}},
+			},
+		}}
+		Expect(runningManagedImageID(pods)).To(BeEmpty())
+	})
+
+	It("returns empty for an empty pod list", func() {
+		Expect(runningManagedImageID(nil)).To(BeEmpty())
+	})
+})
+
+var _ = Describe("managedContainerImage", func() {
+	It("returns the image of the managed container", func() {
+		deployment := &appsv1.Deployment{
+			Spec: appsv1.DeploymentSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{Name: "sidecar", Image: "docker.io/other:v1"},
+							{Name: ManagedWorkloadName, Image: "docker.io/library/test-image:latest"},
+						},
+					},
+				},
+			},
+		}
+		Expect(managedContainerImage(deployment)).To(Equal("docker.io/library/test-image:latest"))
+	})
+
+	It("returns empty when the managed container is absent", func() {
+		deployment := &appsv1.Deployment{
+			Spec: appsv1.DeploymentSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "sidecar", Image: "docker.io/other:v1"}},
+					},
+				},
+			},
+		}
+		Expect(managedContainerImage(deployment)).To(BeEmpty())
+	})
+})
+
 // podWithContainerStatus builds a pod carrying a single container status, which is
 // all podFailureSignature inspects.
 func podWithContainerStatus(name string, cs corev1.ContainerStatus) *corev1.Pod {

@@ -815,6 +815,60 @@ var _ = Describe("MCPServer Controller", func() {
 			Expect(mcpServer.Status.Replicas).To(Equal(int32(3)))
 			Expect(mcpServer.Status.ReadyReplicas).To(Equal(int32(1)))
 		})
+
+		It("should record resolvedImage from the running Pod, falling back to the Deployment image", func() {
+			resource := newTestMCPServer(resourceName)
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			controllerReconciler := newReconcilerForTest(k8sClient, k8sClient.Scheme())
+
+			By("Reconciling with no Pods yet: resolvedImage falls back to the Deployment image")
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			mcpServer := &mcpv1beta1.MCPServer{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+			Expect(mcpServer.Status.ResolvedImage).To(Equal("docker.io/library/test-image:latest"))
+
+			By("Creating a ready, running managed Pod reporting a resolved digest")
+			const digest = "docker.io/library/test-image@sha256:aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999"
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName + "-pod",
+					Namespace: "default",
+					Labels:    managedWorkloadLabels(resourceName),
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  ManagedWorkloadName,
+						Image: "docker.io/library/test-image:latest",
+					}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, pod))).To(Succeed())
+			})
+
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name:    ManagedWorkloadName,
+				Ready:   true,
+				State:   corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+				ImageID: digest,
+			}}
+			Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+
+			By("Reconciling again: resolvedImage reflects the Pod's resolved digest")
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())
+			Expect(mcpServer.Status.ResolvedImage).To(Equal(digest))
+		})
 	})
 
 	Context("When Deployment is unavailable", func() {

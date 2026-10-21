@@ -2282,6 +2282,16 @@ spec:
                   by the owned Deployment.
                 format: int32
                 type: integer
+              resolvedImage:
+                description: |-
+                  ResolvedImage is the resolved container image actually running (digest form
+                  when available), as reported by the running Pod. It is read from the
+                  imageID of the managed container in a running Pod, which carries the
+                  resolved digest even when the spec references a mutable tag. When no
+                  running Pod is available yet, it falls back to the container image
+                  configured on the owned Deployment. This lets fleet management see what
+                  binary is really deployed, not just the desired spec tag.
+                type: string
               serverInfo:
                 description: |-
                   ServerInfo contains identity and capability information reported by the
@@ -4658,6 +4668,16 @@ spec:
                   by the owned Deployment.
                 format: int32
                 type: integer
+              resolvedImage:
+                description: |-
+                  ResolvedImage is the resolved container image actually running (digest form
+                  when available), as reported by the running Pod. It is read from the
+                  imageID of the managed container in a running Pod, which carries the
+                  resolved digest even when the spec references a mutable tag. When no
+                  running Pod is available yet, it falls back to the container image
+                  configured on the owned Deployment. This lets fleet management see what
+                  binary is really deployed, not just the desired spec tag.
+                type: string
               serverInfo:
                 description: |-
                   ServerInfo contains identity and capability information reported by the
