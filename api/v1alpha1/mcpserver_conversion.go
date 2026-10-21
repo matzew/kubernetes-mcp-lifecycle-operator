@@ -182,6 +182,7 @@ func convertRuntimeConfigTo(in RuntimeConfig) v1beta1.RuntimeConfig {
 		Security:  convertSecurityConfigTo(in.Security),
 		Resources: in.Resources,
 		Health:    convertHealthConfigTo(in.Health),
+		Strategy:  in.Strategy,
 	}
 }
 
@@ -191,6 +192,7 @@ func convertRuntimeConfigFrom(in v1beta1.RuntimeConfig) RuntimeConfig {
 		Security:  convertSecurityConfigFrom(in.Security),
 		Resources: in.Resources,
 		Health:    convertHealthConfigFrom(in.Health),
+		Strategy:  in.Strategy,
 	}
 }
 

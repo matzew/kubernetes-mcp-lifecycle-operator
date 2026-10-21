@@ -178,6 +178,99 @@ var _ = Describe("MCPServer Controller - reconcileDeployment", func() {
 		Expect(deploymentNeedsUpdate(mcpServer, existing, desired, false)).To(BeTrue())
 	})
 
+	It("should apply the configured deployment strategy to the built Deployment", func() {
+		mcpServer := newTestMCPServer("test-strategy-set")
+		maxUnavailable := intstr.FromInt32(0)
+		maxSurge := intstr.FromString("50%")
+		mcpServer.Spec.Runtime.Strategy = &appsv1.DeploymentStrategy{
+			Type: appsv1.RollingUpdateDeploymentStrategyType,
+			RollingUpdate: &appsv1.RollingUpdateDeployment{
+				MaxUnavailable: &maxUnavailable,
+				MaxSurge:       &maxSurge,
+			},
+		}
+
+		reconciler := &MCPServerReconciler{
+			Client:    k8sClient,
+			Scheme:    k8sClient.Scheme(),
+			APIReader: k8sClient,
+		}
+
+		deployment, err := reconciler.createDeployment(mcpServer)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deployment.Spec.Strategy.Type).To(Equal(appsv1.RollingUpdateDeploymentStrategyType))
+		Expect(deployment.Spec.Strategy.RollingUpdate).NotTo(BeNil())
+		Expect(deployment.Spec.Strategy.RollingUpdate.MaxUnavailable).To(Equal(&maxUnavailable))
+		Expect(deployment.Spec.Strategy.RollingUpdate.MaxSurge).To(Equal(&maxSurge))
+	})
+
+	It("should apply the Recreate strategy when configured", func() {
+		mcpServer := newTestMCPServer("test-strategy-recreate")
+		mcpServer.Spec.Runtime.Strategy = &appsv1.DeploymentStrategy{
+			Type: appsv1.RecreateDeploymentStrategyType,
+		}
+
+		reconciler := &MCPServerReconciler{
+			Client:    k8sClient,
+			Scheme:    k8sClient.Scheme(),
+			APIReader: k8sClient,
+		}
+
+		deployment, err := reconciler.createDeployment(mcpServer)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deployment.Spec.Strategy.Type).To(Equal(appsv1.RecreateDeploymentStrategyType))
+		Expect(deployment.Spec.Strategy.RollingUpdate).To(BeNil())
+	})
+
+	It("should leave the deployment strategy unset when none is configured", func() {
+		mcpServer := newTestMCPServer("test-strategy-unset")
+		reconciler := &MCPServerReconciler{
+			Client:    k8sClient,
+			Scheme:    k8sClient.Scheme(),
+			APIReader: k8sClient,
+		}
+
+		deployment, err := reconciler.createDeployment(mcpServer)
+		Expect(err).NotTo(HaveOccurred())
+		// Leaving Strategy as the zero value lets Kubernetes apply its default
+		// RollingUpdate behaviour; the operator must not set it explicitly.
+		Expect(deployment.Spec.Strategy).To(Equal(appsv1.DeploymentStrategy{}))
+	})
+
+	It("should detect deployment strategy changes without fighting the Kubernetes default", func() {
+		mcpServer := newTestMCPServer("test-strategy-drift")
+		reconciler := &MCPServerReconciler{
+			Client:    k8sClient,
+			Scheme:    k8sClient.Scheme(),
+			APIReader: k8sClient,
+		}
+
+		By("treating an unset strategy as no change against the API-server default")
+		existing, err := reconciler.createDeployment(mcpServer)
+		Expect(err).NotTo(HaveOccurred())
+		// Simulate the strategy Kubernetes defaults onto the live Deployment.
+		defaultedMaxUnavailable := intstr.FromString("25%")
+		defaultedMaxSurge := intstr.FromString("25%")
+		existing.Spec.Strategy = appsv1.DeploymentStrategy{
+			Type: appsv1.RollingUpdateDeploymentStrategyType,
+			RollingUpdate: &appsv1.RollingUpdateDeployment{
+				MaxUnavailable: &defaultedMaxUnavailable,
+				MaxSurge:       &defaultedMaxSurge,
+			},
+		}
+		desired, err := reconciler.createDeployment(mcpServer)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deploymentNeedsUpdate(mcpServer, existing, desired, false)).To(BeFalse())
+
+		By("detecting a newly configured strategy")
+		mcpServer.Spec.Runtime.Strategy = &appsv1.DeploymentStrategy{
+			Type: appsv1.RecreateDeploymentStrategyType,
+		}
+		desired, err = reconciler.createDeployment(mcpServer)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deploymentNeedsUpdate(mcpServer, existing, desired, false)).To(BeTrue())
+	})
+
 	It("should return existing deployment without error on second call", func() {
 		mcpServer := &mcpv1beta1.MCPServer{}
 		Expect(k8sClient.Get(ctx, typeNamespacedName, mcpServer)).To(Succeed())

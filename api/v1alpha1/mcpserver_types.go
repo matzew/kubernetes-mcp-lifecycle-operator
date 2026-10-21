@@ -20,6 +20,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -344,6 +345,16 @@ type RuntimeConfig struct {
 	// If not specified, no health probes will be configured.
 	// +optional
 	Health HealthConfig `json:"health,omitzero"`
+
+	// Strategy is the deployment strategy used to replace existing MCP server
+	// pods with new ones when the spec changes.
+	// This is the standard Kubernetes DeploymentStrategy and is passed through
+	// unchanged to the managed Deployment's spec.strategy, giving full access to
+	// the RollingUpdate and Recreate strategy types and their options.
+	// When not specified, the field is left unset so Kubernetes keeps its default
+	// RollingUpdate behaviour.
+	// +optional
+	Strategy *appsv1.DeploymentStrategy `json:"strategy,omitempty"`
 }
 
 // NetworkConfig defines network policies for the MCP server pod.

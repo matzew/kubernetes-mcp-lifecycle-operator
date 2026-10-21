@@ -112,6 +112,11 @@ func (r *MCPServerReconciler) reconcileDeployment(
 	if needsUpdate {
 		logger.Info("Updating Deployment", keyName, existingDeployment.Name)
 		existingDeployment.Spec.Replicas = deployment.Spec.Replicas
+		// Only overwrite the strategy when the MCPServer configures one; otherwise
+		// leave the live Deployment's defaulted strategy untouched.
+		if mcpServer.Spec.Runtime.Strategy != nil {
+			existingDeployment.Spec.Strategy = deployment.Spec.Strategy
+		}
 		existingDeployment.Spec.Template.Labels = deployment.Spec.Template.Labels
 		existingDeployment.Spec.Template.Annotations = deployment.Spec.Template.Annotations
 		existingDeployment.Spec.Template.Spec = deployment.Spec.Template.Spec
@@ -166,12 +171,28 @@ func deploymentNeedsUpdate(mcpServer *mcpv1beta1.MCPServer, existing, desired *a
 		!equality.Semantic.DeepEqual(oldPodSpec.Containers[0].LivenessProbe, newPodSpec.Containers[0].LivenessProbe) ||
 		!equality.Semantic.DeepEqual(oldPodSpec.Containers[0].ReadinessProbe, newPodSpec.Containers[0].ReadinessProbe) ||
 		oldPodSpec.ServiceAccountName != newPodSpec.ServiceAccountName ||
+		deploymentStrategyNeedsUpdate(existing.Spec.Strategy, desired.Spec.Strategy) ||
 		!equality.Semantic.DeepEqual(existing.Spec.Replicas, desired.Spec.Replicas) ||
 		!equality.Semantic.DeepEqual(existing.Spec.Template.Labels, desired.Spec.Template.Labels) ||
 		!equality.Semantic.DeepEqual(existing.Spec.Template.Annotations, desired.Spec.Template.Annotations) ||
 		deploymentAnnotationsChanged(mcpServer, existing) ||
 		deploymentLabelsChanged(mcpServer, existing) ||
 		ownershipChanged
+}
+
+// deploymentStrategyNeedsUpdate reports whether the live Deployment's rollout
+// strategy diverges from the desired one. When the MCPServer does not configure a
+// strategy, the desired value is the zero DeploymentStrategy and Kubernetes keeps
+// its defaulted RollingUpdate strategy on the live Deployment; that case is treated
+// as no change so the operator never fights the API server default. When a strategy
+// is configured, DeepDerivative ignores zero-valued desired fields so that
+// user-omitted options Kubernetes defaults (e.g. maxSurge/maxUnavailable) do not
+// trigger a perpetual update.
+func deploymentStrategyNeedsUpdate(existing, desired appsv1.DeploymentStrategy) bool {
+	if desired.Type == "" && desired.RollingUpdate == nil {
+		return false
+	}
+	return !equality.Semantic.DeepDerivative(desired, existing)
 }
 
 // imagePullPolicyNeedsUpdate compares image pull policies while accounting for
@@ -343,6 +364,13 @@ func (r *MCPServerReconciler) createDeployment(mcpServer *mcpv1beta1.MCPServer) 
 				},
 			},
 		},
+	}
+
+	// Apply the deployment rollout strategy if the user configured one.
+	// When unset, the strategy is left as the zero value so Kubernetes keeps its
+	// default RollingUpdate behaviour.
+	if mcpServer.Spec.Runtime.Strategy != nil {
+		deployment.Spec.Strategy = *mcpServer.Spec.Runtime.Strategy
 	}
 
 	// Add security settings if specified

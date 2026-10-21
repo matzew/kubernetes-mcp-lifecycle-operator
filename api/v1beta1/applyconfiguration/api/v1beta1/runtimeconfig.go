@@ -19,6 +19,7 @@ limitations under the License.
 package v1beta1
 
 import (
+	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -64,6 +65,14 @@ type RuntimeConfigApplyConfiguration struct {
 	// Health defines health check configuration for the MCP server.
 	// If not specified, no health probes will be configured.
 	Health *HealthConfigApplyConfiguration `json:"health,omitempty"`
+	// Strategy is the deployment strategy used to replace existing MCP server
+	// pods with new ones when the spec changes.
+	// This is the standard Kubernetes DeploymentStrategy and is passed through
+	// unchanged to the managed Deployment's spec.strategy, giving full access to
+	// the RollingUpdate and Recreate strategy types and their options.
+	// When not specified, the field is left unset so Kubernetes keeps its default
+	// RollingUpdate behaviour.
+	Strategy *appsv1.DeploymentStrategy `json:"strategy,omitempty"`
 }
 
 // RuntimeConfigApplyConfiguration constructs a declarative configuration of the RuntimeConfig type for use with
@@ -101,5 +110,13 @@ func (b *RuntimeConfigApplyConfiguration) WithResources(value v1.ResourceRequire
 // If called multiple times, the Health field is set to the value of the last call.
 func (b *RuntimeConfigApplyConfiguration) WithHealth(value *HealthConfigApplyConfiguration) *RuntimeConfigApplyConfiguration {
 	b.Health = value
+	return b
+}
+
+// WithStrategy sets the Strategy field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Strategy field is set to the value of the last call.
+func (b *RuntimeConfigApplyConfiguration) WithStrategy(value appsv1.DeploymentStrategy) *RuntimeConfigApplyConfiguration {
+	b.Strategy = &value
 	return b
 }
